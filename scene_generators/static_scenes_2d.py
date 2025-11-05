@@ -7,7 +7,7 @@ Moritz Schüler and Alexander João Peterson Santos
 
 import numpy as np
 import random
-from typing import Tuple, List, Deque, Set, Dict
+from typing import Tuple, List, Deque, Set, Dict, Union
 from collections import deque
 from numpy import ndarray
 
@@ -47,6 +47,7 @@ class StaticScene2D:
 
 
 class StaticMaze2D(StaticScene2D):
+    # TODO implement start and end points being a reasonable distance from each other
     
     def __init__(
         self,
@@ -321,3 +322,52 @@ class StaticMaze2D(StaticScene2D):
         
         return start_center_coords, end_center_coords, final_maze
  
+class StaticMinefield2D(StaticScene2D):
+    # TODO implement settings start and end point
+
+    def __init__(self, dims: Tuple[int, int], num_mines: int, mine_diameter: int):
+        self.scene_concept = "minefield"
+        self.dims = dims
+        self.occupancy_grid = self.generate_minefield(dims, num_mines, mine_diameter)
+
+    def generate_minefield(self, dims: Tuple[int, int], num_mines: int, mine_diameter: int):
+        """
+        Generates a simple minefield 2D static scene.
+        Returns an occupancy grid representation of that scene
+        """
+
+        if mine_diameter / dims[0] > 0.25 or mine_diameter / dims[1] > 0.25:
+            raise ValueError("Given mine_diameter is too large for given_dims (try making diameter less than a quarter of shortest dim)")
+        if dims[0] < 8 or dims[1] < 8:
+            raise ValueError("Use at least 8x8 dims for minefield")
+        start_point: Tuple[int, int] = np.random.randint(low=3, high=dims[0]-3), np.random.randint(low=3, high=dims[1]-3)
+
+        occupancy_grid = np.zeros(dims, dtype="uint8")
+
+        for _ in range(num_mines):
+            # pick a mine that is not too close to start point
+            mine_location: Union[Tuple[int, int], None] = None
+
+            while mine_location is None or abs(mine_location[0] - start_point[0]) <= 3 or abs(mine_location[1] - start_point[1]) <= 3:
+                mine_location_r: int = np.random.randint(low=np.ceil(mine_diameter/2), high=dims[0]-np.floor(mine_diameter/2)-1)
+                mine_location_c: int = np.random.randint(low=np.ceil(mine_diameter/2), high=dims[1]-np.floor(mine_diameter/2)-1)
+                mine_location: Tuple[int, int] = mine_location_r, mine_location_c
+            
+            radius: int = mine_diameter // 2
+
+            r_start: int = max(0, mine_location[0] - radius)
+            r_end: int = min(dims[0], mine_location[0] + radius + 1) # +1 for slicing
+            
+            c_start: int = max(0, mine_location[1] - radius)
+            c_end: int = min(dims[1], mine_location[1] + radius + 1) # +1 for slicing
+            
+            occupancy_grid[r_start:r_end, c_start:c_end] = 1
+
+        return occupancy_grid
+
+
+            
+
+
+        
+
