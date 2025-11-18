@@ -1,0 +1,18 @@
+{
+	"folders":
+	[
+		{
+			"path": "."
+		}
+	],
+	"settings":
+	{
+		"LSP": {
+			"LSP-pyright": {
+				"settings": {
+					"python.pythonPath": "/home/alexjps/.conda/envs/TrajectoryPlanning/bin/python"
+				}
+			}
+		}
+	}
+}
