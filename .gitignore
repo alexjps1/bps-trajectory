@@ -1,2 +1,2 @@
-/environments
-/rl_agent_static_tensorboard
+/environment_generation/environments
+/rl_agent/rl_agent_static_tensorboard
