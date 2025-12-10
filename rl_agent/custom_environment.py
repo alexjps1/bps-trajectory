@@ -12,12 +12,13 @@ from tqdm import tqdm
 import torch.nn as nn
 import torch
 
+
 class GridEnvCNN(gym.Env):
     """Custom Environment for Grid World"""
 
     metadata = {"render_modes": ["human"], "render_fps": 30}
 
-    def __init__(self, grid, start, goal, max_steps):
+    def __init__(self, grid, start, goal, max_steps, bps = False):
         super().__init__()
         self.grid = np.array(grid, dtype=np.int8)
         self.size = self.grid.shape[0]
@@ -27,10 +28,17 @@ class GridEnvCNN(gym.Env):
         self.current_step = 0
         self.agent_position = list(self.start)
         self.action_space = spaces.Discrete(4) # up, down, left, right
+        self.agent_position_buffer = [] # stores positions of the agent for early stopping if it does not move for 5 steps
         # self.observation_space = spaces.Box(low=0, high=255, shape=(3, self.size, self.size), dtype=np.uint8)
+        self.n_channels = 3
+        self.bps = bps
+        if self.bps:
+            self.bps_encoding = ...
+            self.size = self.bps_encoding.shape[0]
+            self.n_channels = 1
 
         self.observation_space = spaces.Dict({
-            "image": spaces.Box(low=0, high=255, shape=(3, self.size, self.size), dtype=np.uint8),
+            "image": spaces.Box(low=0, high=255, shape=(self.n_channels, self.size, self.size), dtype=np.uint8),
             "coords": spaces.Box(low=0.0, high=1.0, shape=(4,), dtype=np.float32),
         })
         
@@ -51,20 +59,33 @@ class GridEnvCNN(gym.Env):
         else:
             collision = True
 
-        obs = np.zeros((3, self.size, self.size), dtype=np.uint8)
-        obs[0] = (self.grid == 1).astype(np.uint8)        # obstacles
-        obs[1, self.goal[0], self.goal[1]] = 1              # goal
-        obs[2, self.agent_position[0], self.agent_position[1]] = 1  # agent
-        obs *= 255
+        self.agent_position_buffer.append(self.agent_position)
 
-        # observation = obs[np.newaxis, :, :] # shape to (1, Size, Size)
+        if self.bps:
+            obs = (self.bps_encoding+1)/2 * 255
+            obs = obs[np.newaxis, :, :]
+        else:
+            obs = np.zeros((3, self.size, self.size), dtype=np.uint8)
+            obs[0] = (self.grid == 1).astype(np.uint8)        # obstacles
+            obs[1, self.goal[0], self.goal[1]] = 1              # goal
+            obs[2, self.agent_position[0], self.agent_position[1]] = 1  # agent
+            obs *= 255
+
+        
+        # early stopping if the agent stays at the same position for 5 steps
+        last5 = self.agent_position_buffer[-5:]
+        stuck = all(np.array_equal(a, last5[0]) for a in last5) and len(last5) == 5
+        
         terminated = np.array_equal(self.agent_position, self.goal)
-        truncated = self.current_step >= self.max_steps
+        truncated = self.current_step >= self.max_steps or stuck
+
 
         reward = 0
         if terminated:
             reward += 10
         elif collision:
+            reward -= 0.1
+        elif stuck: # negative reward for beeing stuck
             reward -= 0.1
         else:
             reward -= 0.01
@@ -78,11 +99,15 @@ class GridEnvCNN(gym.Env):
 
 
     def reset(self, seed=None, options=None):
-        obs = np.zeros((3, self.size, self.size), dtype=np.uint8)
-        obs[0] = (self.grid == 1).astype(np.uint8)        # obstacles
-        obs[1, self.goal[0], self.goal[1]] = 1              # goal
-        obs[2, self.start[0], self.start[1]] = 1  # agent  # agent
-        obs *= 255
+        if self.bps:
+            obs = (self.bps_encoding+1)/2 * 255
+            obs = obs[np.newaxis, :, :]
+        else:
+            obs = np.zeros((3, self.size, self.size), dtype=np.uint8)
+            obs[0] = (self.grid == 1).astype(np.uint8)        # obstacles
+            obs[1, self.goal[0], self.goal[1]] = 1              # goal
+            obs[2, self.start[0], self.start[1]] = 1  # agent  # agent
+            obs *= 255
 
         # observation = obs[np.newaxis, :, :] # shape to (1, Size, Size)
         self.agent_position = list(self.start)
