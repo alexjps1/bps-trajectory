@@ -5,24 +5,20 @@ Moritz Schüler and Alexander João Peterson Santos
 2025-11-18
 """
 
-"""
-Training Loops
-"""
-
-# imports
+# standard library imports
 import os
 
+# third party imports
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from pytorch3d.loss import chamfer_distance
-from typing import Sized
-
-# own import
-from reconstruction_vis import visualize_cloud_difference, visualize_grid_difference
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+# first party imports
+from reconstruction_vis import visualize_cloud_difference, visualize_grid_difference
 
 
 def save_checkpoint(
@@ -139,7 +135,12 @@ def evaluate_bps_grid_decoder(
             target_grid = target_grid.to(predicted_grid.dtype)
 
             if not visualization_generated:
-                visualize_grid_difference(predicted_grid[0], target_grid[0], show_window=False, output_path=visualization_filepath)
+                visualize_grid_difference(
+                    predicted_grid[0],
+                    target_grid[0],
+                    show_window=False,
+                    output_path=visualization_filepath,
+                )
                 visualization_generated = True
 
             batch_loss: torch.Tensor = criterion(
@@ -148,7 +149,7 @@ def evaluate_bps_grid_decoder(
             total_loss += batch_loss.item()
 
     decoder.train()
-    
+
     return total_loss / len(dataloader)
 
 

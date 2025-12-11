@@ -5,13 +5,15 @@ Moritz Schüler and Alexander João Peterson Santos
 2025-11-18
 """
 
-# imports
+# standard library imports
 import glob
 import os
 import sys
-from typing import List, Tuple, Union
+from typing import List, cast
 
+# third party imports
 import numpy as np
+from numpy.typing import NDArray
 import torch
 from torch.utils.data import Dataset
 
@@ -19,12 +21,12 @@ from torch.utils.data import Dataset
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.join(current_dir, "..")
 sys.path.insert(0, parent_dir)
+
+# first party imports
 import bps
 
 # constants
-PRECISION = np.float32
-ArrayLike = np.ndarray | torch.Tensor
-
+ArrayLike = NDArray[np.float64] | torch.Tensor
 
 class Scenes2dDataset(Dataset):
     """
@@ -32,8 +34,7 @@ class Scenes2dDataset(Dataset):
     Scenes are provided alongside the ground truth / target encoding of choice (either cloud or grid)
     """
 
-    bps_encoding_type: str
-    basis_point_cloud: np.ndarray
+    basis_point_cloud: NDArray[np.float64]
     bps_encoding_type: str
     norm_bound_shape: str
     target_encoding: str
@@ -43,17 +44,16 @@ class Scenes2dDataset(Dataset):
     file_boundaries: List
     total_samples: int
 
-
     def __init__(
         self,
         data_directory: str,
-        basis_point_cloud: np.ndarray,
+        basis_point_cloud: NDArray[np.float64],
         bps_encoding_type: str,
         norm_bound_shape: str,
         target_encoding: str,
         max_num_scene_points: int,
         file_pattern: str = "*.npy",
-        as_numpy: bool = False
+        as_numpy: bool = False,
     ) -> None:
         """
         Initializes the memory-mapped dataset.
@@ -128,7 +128,7 @@ class Scenes2dDataset(Dataset):
     def from_directory(
         cls,
         data_directory: str,
-        basis_point_cloud: np.ndarray,
+        basis_point_cloud: NDArray[np.float64],
         bps_encoding_type: str,
         norm_bound_shape: str,
         target_encoding: str,
@@ -155,13 +155,13 @@ class Scenes2dDataset(Dataset):
             file_pattern,
         )
 
-    def _find_file_and_local_index(self, global_idx: int) -> Tuple[int, int]:
+    def _find_file_and_local_index(self, global_idx: int) -> tuple[int, int]:
         """
         Given a global index, find which file it belongs to and the local index within that file.
 
         Returns
         -------
-        Tuple[int, int]: (file_index, local_index)
+        tuple[int, int]: (file_index, local_index)
         """
         if global_idx >= self.total_samples:
             raise IndexError(
@@ -183,12 +183,7 @@ class Scenes2dDataset(Dataset):
         """Returns the total number of samples across all files."""
         return self.total_samples
 
-    def __getitem__(
-        self, idx: Union[int, torch.Tensor]
-    ) -> Union[
-        Tuple[ArrayLike, ArrayLike, int],
-        Tuple[ArrayLike, ArrayLike],
-    ]:
+    def __getitem__(self, idx: int):
         """
         Returns the BPS-encoded and target scene representations for a given sample.
 
@@ -201,10 +196,6 @@ class Scenes2dDataset(Dataset):
         -------
         Same as Scenes2dDataset.__getitem__
         """
-        # Convert tensor index to int if needed
-        if isinstance(idx, torch.Tensor):
-            idx = idx.item()
-
         # Find which file and local index
         file_idx, local_idx = self._find_file_and_local_index(idx)
 
@@ -215,29 +206,30 @@ class Scenes2dDataset(Dataset):
         scene_occupancy_grid = (scene_occupancy_grid_raw != 0).astype(int)
 
         # Create BPS encoding
-        scene_point_cloud: np.ndarray = bps.create_point_cloud(scene_occupancy_grid)
-        encoded_result = bps.encode_scene(
+        scene_point_cloud: NDArray[np.float64] = bps.create_point_cloud(scene_occupancy_grid)
+        encoded_result: NDArray[np.float64] = cast(NDArray[np.float64], bps.encode_scene(
             scene_point_cloud, self.bps, self.bps_encoding_type, self.norm_bound_shape
-        )
-        assert isinstance(encoded_result, np.ndarray)
+        ))
 
         bps_encoded_arr: ArrayLike
         if self.as_numpy:
-            bps_encoded_arr = encoded_result.astype(PRECISION)
+            bps_encoded_arr = encoded_result.astype(np.float64)
         else:
-            bps_encoded_arr = torch.from_numpy(encoded_result.astype(PRECISION))
+            bps_encoded_arr = torch.from_numpy(encoded_result.astype(np.float64))
 
         if self.target_encoding == "grid":
             # generate grid encoding and return
             scene_occupancy_grid_arr: ArrayLike
             if self.as_numpy:
-                scene_occupancy_grid_arr = scene_occupancy_grid.astype(PRECISION)
+                scene_occupancy_grid_arr = scene_occupancy_grid.astype(np.float64)
             else:
-                scene_occupancy_grid_arr = torch.from_numpy(scene_occupancy_grid.astype(PRECISION))
+                scene_occupancy_grid_arr = torch.from_numpy(
+                    scene_occupancy_grid.astype(np.float64)
+                )
             return (bps_encoded_arr, scene_occupancy_grid_arr)
         elif self.target_encoding == "cloud":
             # pad the scene point cloud so tensors stack nicely
-            padded_scene_point_cloud: np.ndarray = np.pad(
+            padded_scene_point_cloud: NDArray[np.float64] = np.pad(
                 scene_point_cloud,
                 pad_width=(
                     (0, self.max_num_scene_points - scene_point_cloud.shape[0]),
@@ -249,9 +241,11 @@ class Scenes2dDataset(Dataset):
 
             scene_point_cloud_arr: ArrayLike
             if self.as_numpy:
-                scene_point_cloud_arr = padded_scene_point_cloud.astype(PRECISION)
+                scene_point_cloud_arr = padded_scene_point_cloud.astype(np.float64)
             else:
-                scene_point_cloud_arr = torch.from_numpy(padded_scene_point_cloud.astype(PRECISION))
+                scene_point_cloud_arr = torch.from_numpy(
+                    padded_scene_point_cloud.astype(np.float64)
+                )
             num_points_in_scene: int = scene_point_cloud.shape[0]
             return (bps_encoded_arr, scene_point_cloud_arr, num_points_in_scene)
         else:

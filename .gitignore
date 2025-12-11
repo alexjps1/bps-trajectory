@@ -1,4 +1,10 @@
+.gitignore
 /environment_generation/environments
 /rl_agent/rl_agent_static_tensorboard
 /rl_agent/models
 /rl_agent/__pycache__
+__pycache__/
+*sublime-project
+*sublime-workspace
+cpython*pyc
+sftp-config.json

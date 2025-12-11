@@ -5,13 +5,14 @@ Moritz Schüler and Alexander João Peterson Santos
 2025-11-11
 """
 
-# imports
+# standard library imports
 import argparse
 import json
 import os
 import sys
-from typing import Tuple, Union
+from typing import Union
 
+# third party imports
 import numpy as np
 import torch
 import torch.nn as nn
@@ -22,16 +23,13 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.join(current_dir, "..")
 sys.path.insert(0, parent_dir)
 
-# our imports
+# first party imports
+import bps
 import loops
 from datasets import Scenes2dDataset
-from models.grid2d_decoder01 import BPSOccupancyGrid2dDecoder01
 from models.grid2d_decoder02 import BPSOccupancyGrid2dDecoder02
 from models.ptcloud_decoder01 import BPSPointCloudDecoder01
-import bps
 
-# constants
-PRECISION = np.float32
 
 
 def load_config(config_path: str):

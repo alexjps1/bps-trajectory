@@ -5,11 +5,11 @@ Mortiz Schüler and Alexander João Peterson Santos
 2025-11-11
 """
 
+# standard library imports
 import itertools
 import json
 import os
 import subprocess
-import sys
 from datetime import datetime
 
 
@@ -162,20 +162,20 @@ def main():
                 failed += 1
 
         except KeyboardInterrupt:
-            print(f"\n\nInterrupted by user!")
+            print("\n\nInterrupted by user!")
             break
         except Exception as e:
             print(f"✗ Unexpected error: {e}")
             failed += 1
 
-    print(f"\n" + "=" * 60)
+    print("\n" + "=" * 60)
     print(f"Search completed at {datetime.now()}")
     print(f"Successful: {successful}")
     print(f"Failed: {failed}")
     print(f"Total: {successful + failed}")
 
     # Show log files
-    print(f"\nLog files in: reconstruction_loss/logs/")
+    print("\nLog files in: reconstruction_loss/logs/")
     print("Config files in: reconstruction_loss/configs/")
 
 

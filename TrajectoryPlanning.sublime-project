@@ -12,7 +12,8 @@
 				"settings": {
 					"python.pythonPath": "/home/alexjps/.conda/envs/TrajectoryPlanning/bin/python"
 				}
-			}
-		}
-	}
+			},
+		},
+		"tab_size": 4
+	},
 }

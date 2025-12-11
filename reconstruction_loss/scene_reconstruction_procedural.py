@@ -15,37 +15,36 @@ Limitations of this implementation:
     (This unfortunately poses some validity issues when comparing to ML-based reconstruction loss)
 """
 
-# imports
+# standard library imports
 import argparse
-import numpy as np
 import os
 import sys
-from typing import Tuple
-from torch.utils.data import DataLoader
-import torch.nn.functional as F
+
+# third party imports
+import numpy as np
 import torch
+import torch.nn.functional as F
+from numpy.typing import NDArray
+from torch.utils.data import DataLoader
 from tqdm import tqdm
-
-from reconstruction_vis import visualize_grid_difference
-
 
 # enable importing from project root
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.join(current_dir, "..")
 sys.path.insert(0, parent_dir)
 
-# our imports
-from datasets import Scenes2dDataset
-
+# first party imports
 import bps
+from datasets import Scenes2dDataset
+from reconstruction_vis import visualize_grid_difference
 
 # constants
 DEFAULT_DATASET_DIR = "/home/alexjps/Dokumente/Uni/ADLR/TrajectoryPlanning/scenes2d"
 
 
 def interpolate_distance_map(
-    bps: np.ndarray, bps_grid_length: int, output_grid_length: int
-) -> np.ndarray:
+    bps_grid: NDArray[np.float64], bps_grid_length: int, output_grid_length: int
+) -> NDArray[np.float64]:
     """
     Creates a distance map of a 2d square grid-based scene by upsampling basis point distances using bilinear interpolation.
     This is the first step in reconstructing a scene procedurally (next, apply a threshold to distance map vals to decide what counts as "occupied")
@@ -53,15 +52,21 @@ def interpolate_distance_map(
     NOTE: These operations are theoretically parallelizeable assuming identical scene and bps grid size.
           Unfortuantely, this implementation does not take full advantage of numpy and is not parallelized.
 
-    Args:
-        basis_grid: a 16x16 NumPy array of distance values.
+    Args
+    ----
+    bps_grid: np.ndarray
+        two-dimensional ndarray of shape (bps_grid_length, bps_grid_length)
+    bps_grid_length: int
+        side length of the square bps grid
+    output_grid_length: int
+        side length of the square scene to be reconstructed by this bilinear interpolation
 
-    Returns:
-        a 64x64 NumPy array representing the interpolated distance map.
+    Returns
+    -------
+    np.ndarray:
+        two-dimensional ndarray of shape (output_grid_length, output_grid_length)
+        representing distance field upsampled to original scene dimensions
     """
-    # turn bps into a grid
-    bps_grid: np.ndarray = bps.reshape((bps_grid_length, bps_grid_length), order='F')
-
     # check inputs
     if bps_grid.shape != (bps_grid_length, bps_grid_length):
         raise ValueError(
@@ -75,7 +80,7 @@ def interpolate_distance_map(
     grid_length_scale_factor = output_grid_length / bps_grid_length
 
     interpolated_map = np.zeros(
-        (output_grid_length, output_grid_length), dtype=np.float32
+        (output_grid_length, output_grid_length), dtype=np.float64
     )
 
     for x in range(output_grid_length):
@@ -111,11 +116,13 @@ def interpolate_distance_map(
     return interpolated_map
 
 
-def apply_threshold(distance_map: np.ndarray, threshold: float = 0.5) -> np.ndarray:
+def apply_threshold(
+    distance_map: NDArray[np.float64], threshold: float = 0.5
+) -> NDArray[np.int64]:
     """
     Given a distance map of an upsampled 2d square grid scene, apply the threshold to decide which grid cells are occupied.
     """
-    reconstructed_scene: np.ndarray = (distance_map < threshold).astype(np.int8)
+    reconstructed_scene: NDArray[np.int64] = (distance_map < threshold).astype(np.int64)
     return reconstructed_scene
 
 
@@ -125,11 +132,12 @@ def main(args: argparse.Namespace):
     scene_length: int = args.scenelen if args.scenelen is not None else 64
     show_visualization: bool = args.visual
 
-    scene_length: int = 64
     # bps grid generation based on scene length and with NO normalization
     step_size: int = scene_length // bps_grid_length
     max_pixel_coord: int = (bps_grid_length - 1) * step_size
-    basis_points_grid: np.ndarray = bps.generate_bps_ngrid(bps_grid_length, 2, 0, max_pixel_coord)
+    basis_points_grid: NDArray[np.float64] = bps.generate_bps_ngrid(
+        bps_grid_length, 2, 0, max_pixel_coord
+    )
 
     # dataset
     dataset_directory: str = DEFAULT_DATASET_DIR
@@ -137,15 +145,14 @@ def main(args: argparse.Namespace):
         dataset_directory,
         basis_points_grid,
         bps_encoding_type="scalar",  # this method doesn't work with difference vectors
-        norm_bound_shape="none",  # because 
+        norm_bound_shape="none",  # because
         target_encoding="grid",
-        max_num_scene_points=(scene_length ** 2),
-        as_numpy=True
+        max_num_scene_points=(scene_length**2),
+        as_numpy=True,
     )
 
     # dataloader
-    dataloader: DataLoader = DataLoader(
-        dataset=scenes2d, batch_size=1, shuffle=True)
+    dataloader: DataLoader = DataLoader(dataset=scenes2d, batch_size=1, shuffle=True)
 
     # loss function
     criterion = F.binary_cross_entropy
@@ -153,18 +160,27 @@ def main(args: argparse.Namespace):
     total_loss: float = 0.0
 
     # this assumes batch size of 1
-    bps_encoding_np: np.ndarray
+    bps_encoding_np: NDArray[np.float64]
     loop: tqdm = tqdm(dataloader, desc="Reconstructing... ")
-    for i,(bps_encoding, target_grid) in enumerate(loop):
+    for i, (bps_encoding, target_grid) in enumerate(loop):
         bps_encoding_np = bps_encoding[0].numpy()
-        distance_map: np.ndarray = interpolate_distance_map(bps_encoding_np, bps_grid_length, scene_length)
+        distance_map: NDArray[np.float64] = interpolate_distance_map(
+            bps_encoding_np, bps_grid_length, scene_length
+        )
         predicted_grid: torch.Tensor = torch.from_numpy(apply_threshold(distance_map))
 
         # have to convert to float bc tensors otherwise get interpreted as bool tensors
-        loss: float = float(criterion(predicted_grid.float(), target_grid[0].float(), reduction="mean"))
+        loss: float = float(
+            criterion(predicted_grid.float(), target_grid[0].float(), reduction="mean")
+        )
         total_loss += loss
 
-        visualize_grid_difference(predicted_grid, target_grid[0], show_window=show_visualization, save_image=False)
+        visualize_grid_difference(
+            predicted_grid,
+            target_grid[0],
+            show_window=show_visualization,
+            save_image=False,
+        )
 
         print(f"loss of {loss}")
 
@@ -173,27 +189,27 @@ def main(args: argparse.Namespace):
     print(f"The average loss was {average_loss}")
 
 
-
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Procedural Scene Reconstruction")
     parser.add_argument(
-        "-b", "--bpsgridlen",
+        "-b",
+        "--bpsgridlen",
         type=int,
         help="Side length of the square BPS grid to use in reconstruction",
-        required=True
+        required=True,
     )
     parser.add_argument(
-        "-s", "--scenelen",
+        "-s",
+        "--scenelen",
         nargs="?",
         type=int,
-        help="Side length of the 2d square scene grids present in the dataset being used"
+        help="Side length of the 2d square scene grids present in the dataset being used",
     )
     parser.add_argument(
-        "-v", "--visual",
+        "-v",
+        "--visual",
         action="store_true",
-        help="Set this flag to show a visualization of every generated reconstruction"
+        help="Set this flag to show a visualization of every generated reconstruction",
     )
     args = parser.parse_args()
     main(args)
