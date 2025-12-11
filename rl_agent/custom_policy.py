@@ -25,13 +25,52 @@ class CustomCNN(BaseFeaturesExtractor):
 
         # image input
         n_input_channels = image_observation_space.shape[0]
+        # self.cnn = nn.Sequential(
+        #     nn.Conv2d(n_input_channels, 32, kernel_size=5, stride=1, padding=0),
+        #     nn.ReLU(),
+        #     nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=0),
+        #     nn.ReLU(),
+        #     nn.Flatten(),
+        # )
+
+
+        # self.cnn = nn.Sequential(
+        #         nn.Conv2d(n_input_channels, 32, 3, stride=2, padding=1),
+        #         nn.ReLU(),
+        #         nn.Conv2d(32, 48, 3, stride=2, padding=1),               
+        #         nn.ReLU(),
+        #         nn.Conv2d(48, 64, 3, stride=2, padding=1),                
+        #         nn.ReLU(),
+        #         nn.Flatten()
+        #     )
+
         self.cnn = nn.Sequential(
-            nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=0),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),
-            nn.ReLU(),
-            nn.Flatten(),
-        )
+                nn.Conv2d(n_input_channels, 32, 3, stride=1, padding=1),
+                nn.ReLU(),
+                nn.Conv2d(32, 32, 1),      # <— inexpensive capacity
+                nn.ReLU(),
+                nn.MaxPool2d(3),  
+
+                nn.Conv2d(32, 48, 3, stride=1, padding=1),
+                nn.ReLU(),
+                nn.Conv2d(48, 48, 1),      # <— another cheap boost
+                nn.ReLU(),
+                nn.MaxPool2d(3),  
+
+                nn.Conv2d(48, 64, 3, stride=1, padding=1),
+                nn.ReLU(),
+                nn.Conv2d(64, 64, 1),      # <— cheap capacity
+                nn.ReLU(),
+                nn.MaxPool2d(3),  
+
+                # nn.Conv2d(64, 80, 3, stride=1, padding=1),               # 8→4
+                # nn.ReLU(),
+                # nn.Conv2d(80, 80, 1),
+                # nn.ReLU(),
+                # nn.MaxPool2d(3),
+
+                nn.Flatten(),
+            )
 
         # Compute shape by doing one forward pass
         with torch.no_grad():
@@ -40,11 +79,24 @@ class CustomCNN(BaseFeaturesExtractor):
             ).shape[1]
 
         # coordinate input
-        self.l1 = nn.Sequential(
-            nn.Linear(4, 4), nn.ReLU()
-        )
 
-        self.linear = nn.Sequential(nn.Linear(n_flatten + 4, features_dim), nn.ReLU())
+        # self.l1 = nn.Sequential(
+        #     nn.Linear(4, 4), nn.ReLU()
+        # )
+
+        self.l1 = nn.Sequential(
+                nn.Linear(4, 128),
+                nn.ReLU(),
+                nn.Linear(128, 128),
+                nn.ReLU()
+            )
+        print(n_flatten)
+
+        self.linear = nn.Sequential(nn.Linear(n_flatten + 128, 512),
+                                    nn.ReLU(),
+                                    nn.Linear(512, features_dim),
+                                    nn.ReLU()
+                                    )
 
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         image_observations = observations['image']
