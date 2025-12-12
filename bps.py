@@ -13,10 +13,10 @@ import numpy as np
 from numpy.typing import NDArray
 from sklearn.neighbors import BallTree
 
-
 """
 BPS FUNCTIONS
 """
+
 
 def create_point_cloud(occupancy_grid: NDArray[np.int64]) -> NDArray[np.float64]:
     """
@@ -32,7 +32,7 @@ def create_point_cloud(occupancy_grid: NDArray[np.int64]) -> NDArray[np.float64]
     np.ndarray
         2d or 3d points of point cloud
     """
-    if not occupancy_grid.ndim not in [2, 3]:
+    if occupancy_grid.ndim not in [2, 3]:
         raise ValueError("occupancy_grid is not a 2d or 3d np.ndarray")
     mask: NDArray[np.bool_] = cast(NDArray[np.bool_], occupancy_grid != 0)
     point_cloud_arr: NDArray[np.float64] = np.argwhere(mask).astype(np.float64)
@@ -121,9 +121,7 @@ def generate_bps_ngrid(
 
     linspaces = [np.linspace(minv, maxv, num=grid_size) for _ in range(0, num_dims)]
     coords = np.meshgrid(*linspaces)
-    basis = np.concatenate(
-        [coords[i].reshape([-1, 1]) for i in range(0, num_dims)], axis=1
-    )
+    basis = np.concatenate([coords[i].reshape([-1, 1]) for i in range(0, num_dims)], axis=1)
 
     return basis
 
@@ -133,6 +131,7 @@ def encode_scene(
     basis_point_cloud: NDArray[np.float64],
     encoding_type: str,
     norm_bound_shape: str,
+    grid_shape_for_grid_basis: None | tuple[int, int] = None,
 ) -> NDArray[np.float64] | tuple[NDArray[np.float64], NDArray[np.float64]]:
     """
     Returns BPS-encoded ndarray of a scene.
@@ -151,34 +150,31 @@ def encode_scene(
         which shape to use for scene normalization
         use ncube with grid-based BPS or nsphere with random sampling-based BPS
         use none for no normalization at all (don't use this for ML-based scene reconstruction)
-
+    grid_shape_for_grid_basis: tuple[int, int] (optional)
+        Only relevant if the basis_point_cloud is grid-based and encoding_type == "scalar"
+        Pass the shape of the bps grid here and the resulting bps encoding will be reshaped to be grid-shaped
+        Ideal for working with convolutional models, which can use this for upsampling
 
     Returns
     -------
     np.ndarray or Tuple[np.ndarray, np.ndarray]
         The BPS-encoded scene
     """
-    normalized_scene_point_cloud: NDArray[np.float64] = _normalize_scene(
-        scene_point_cloud, norm_bound_shape
-    )
+    normalized_scene_point_cloud: NDArray[np.float64] = _normalize_scene(scene_point_cloud, norm_bound_shape)
     nn_distances: NDArray[np.float64]
     nn_indexes: NDArray[np.int64]
-    nn_distances, nn_indexes = _nearest_neighbor_query(
-        normalized_scene_point_cloud, basis_point_cloud
-    )
+    nn_distances, nn_indexes = _nearest_neighbor_query(normalized_scene_point_cloud, basis_point_cloud)
 
     if encoding_type == "scalar":
+        if grid_shape_for_grid_basis is not None:
+            return nn_distances.reshape(grid_shape_for_grid_basis, order="F")
         return nn_distances
     elif encoding_type == "diff":
-        return _calculate_diff_vectors(
-            normalized_scene_point_cloud, basis_point_cloud, nn_indexes
-        )
+        return _calculate_diff_vectors(normalized_scene_point_cloud, basis_point_cloud, nn_indexes)
     elif encoding_type == "both":
         return (
             nn_distances,
-            _calculate_diff_vectors(
-                normalized_scene_point_cloud, basis_point_cloud, nn_indexes
-            ),
+            _calculate_diff_vectors(normalized_scene_point_cloud, basis_point_cloud, nn_indexes),
         )
     else:
         raise ValueError("encoding should be one of 'scalar', 'diff', or 'both'")
@@ -189,9 +185,7 @@ HELPER FUNCTIONS
 """
 
 
-def _normalize_scene(
-    scene_point_cloud: NDArray[np.float64], bound_shape: str
-) -> NDArray[np.float64]:
+def _normalize_scene(scene_point_cloud: NDArray[np.float64], bound_shape: str) -> NDArray[np.float64]:
     """
     Normalize the scene by centering points and scaling to fit within a unit n-sphere or unit n-cube.
 
@@ -212,16 +206,12 @@ def _normalize_scene(
     if bound_shape == "none":
         return scene_point_cloud.astype(np.float64)
 
-    centroid: NDArray[np.float64] = cast(
-        NDArray[np.float64], np.mean(scene_point_cloud, axis=0)
-    )
+    centroid: NDArray[np.float64] = cast(NDArray[np.float64], np.mean(scene_point_cloud, axis=0))
     centered_cloud: NDArray[np.float64] = scene_point_cloud - centroid
 
     max_distance: np.float64
     if bound_shape == "nsphere":
-        distances_from_centroid: NDArray[np.float64] = cast(
-            NDArray[np.float64], np.linalg.norm(centered_cloud, axis=1)
-        )
+        distances_from_centroid: NDArray[np.float64] = cast(NDArray[np.float64], np.linalg.norm(centered_cloud, axis=1))
         max_distance = np.max(distances_from_centroid)
     elif bound_shape == "ncube":
         max_distance = cast(np.float64, np.max(np.abs(centered_cloud)))
@@ -232,9 +222,7 @@ def _normalize_scene(
     return normalized_scene_point_cloud
 
 
-def _nearest_neighbor_query(
-    scene_point_cloud: NDArray[np.float64], basis_point_cloud: NDArray[np.float64]
-) -> tuple[NDArray[np.float64], NDArray[np.int64]]:
+def _nearest_neighbor_query(scene_point_cloud: NDArray[np.float64], basis_point_cloud: NDArray[np.float64]) -> tuple[NDArray[np.float64], NDArray[np.int64]]:
     """
     Get distances and indices of nearest neighbors to basis points in scene.
 
@@ -253,9 +241,7 @@ def _nearest_neighbor_query(
         indexes of points in scene_point_cloud which are closest to points in basis_point_cloud
     """
     # create ball tree of scene w/ Euclidean distances and query it for nearest neighbors
-    scene_ball_tree: BallTree = BallTree(
-        scene_point_cloud, leaf_size=40, metric="minkowski"
-    )
+    scene_ball_tree: BallTree = BallTree(scene_point_cloud, leaf_size=40, metric="minkowski")
     distances: NDArray[np.float64]
     indexes: NDArray[np.int64]
     distances, indexes = cast(
@@ -292,9 +278,7 @@ def _calculate_diff_vectors(
     return diff_vecs
 
 
-def _random_sampling_nsphere(
-    num_points: int, num_dims: int, radius: float = 1.0, random_seed: int = 13
-) -> NDArray[np.float64]:
+def _random_sampling_nsphere(num_points: int, num_dims: int, radius: float = 1.0, random_seed: int = 13) -> NDArray[np.float64]:
     """
     Get points by sampling uniformly from an n-sphere.
 
@@ -325,9 +309,7 @@ def _random_sampling_nsphere(
     np.random.seed(random_seed)
     # sample point from d-sphere
     x = np.random.normal(size=[num_points, num_dims])
-    x_norms = cast(
-        NDArray[np.float64], np.sqrt(np.sum(np.square(x), axis=1)).reshape([-1, 1])
-    )
+    x_norms = cast(NDArray[np.float64], np.sqrt(np.sum(np.square(x), axis=1)).reshape([-1, 1]))
     x_unit = x / x_norms
 
     # now sample radiuses uniformly
@@ -339,9 +321,7 @@ def _random_sampling_nsphere(
     return x
 
 
-def _random_sampling_ncube(
-    num_points: int, num_dims: int, apothem: float = 1.0, random_seed: int = 13
-) -> NDArray[np.float64]:
+def _random_sampling_ncube(num_points: int, num_dims: int, apothem: float = 1.0, random_seed: int = 13) -> NDArray[np.float64]:
     """
     Get points by sampling uniformly from an n-cube.
 

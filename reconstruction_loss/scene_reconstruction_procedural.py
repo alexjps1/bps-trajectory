@@ -42,9 +42,7 @@ from reconstruction_vis import visualize_grid_difference
 DEFAULT_DATASET_DIR = "/home/alexjps/Dokumente/Uni/ADLR/TrajectoryPlanning/scenes2d"
 
 
-def interpolate_distance_map(
-    bps_grid: NDArray[np.float64], bps_grid_length: int, output_grid_length: int
-) -> NDArray[np.float64]:
+def interpolate_distance_map(bps_grid: NDArray[np.float64], bps_grid_length: int, output_grid_length: int) -> NDArray[np.float64]:
     """
     Creates a distance map of a 2d square grid-based scene by upsampling basis point distances using bilinear interpolation.
     This is the first step in reconstructing a scene procedurally (next, apply a threshold to distance map vals to decide what counts as "occupied")
@@ -69,19 +67,13 @@ def interpolate_distance_map(
     """
     # check inputs
     if bps_grid.shape != (bps_grid_length, bps_grid_length):
-        raise ValueError(
-            f"input basis_grid must be square and match given bps_grid_length {bps_grid_length}"
-        )
+        raise ValueError(f"input basis_grid must be square and match given bps_grid_length {bps_grid_length}")
     if bps_grid_length > output_grid_length:
-        raise ValueError(
-            f"bps_grid_length {bps_grid_length} should be smaller or equal to output_grid_length {output_grid_length}"
-        )
+        raise ValueError(f"bps_grid_length {bps_grid_length} should be smaller or equal to output_grid_length {output_grid_length}")
 
     grid_length_scale_factor = output_grid_length / bps_grid_length
 
-    interpolated_map = np.zeros(
-        (output_grid_length, output_grid_length), dtype=np.float64
-    )
+    interpolated_map = np.zeros((output_grid_length, output_grid_length), dtype=np.float64)
 
     for x in range(output_grid_length):
         for y in range(output_grid_length):
@@ -116,9 +108,7 @@ def interpolate_distance_map(
     return interpolated_map
 
 
-def apply_threshold(
-    distance_map: NDArray[np.float64], threshold: float = 0.5
-) -> NDArray[np.int64]:
+def apply_threshold(distance_map: NDArray[np.float64], threshold: float = 0.5) -> NDArray[np.int64]:
     """
     Given a distance map of an upsampled 2d square grid scene, apply the threshold to decide which grid cells are occupied.
     """
@@ -135,9 +125,7 @@ def main(args: argparse.Namespace):
     # bps grid generation based on scene length and with NO normalization
     step_size: int = scene_length // bps_grid_length
     max_pixel_coord: int = (bps_grid_length - 1) * step_size
-    basis_points_grid: NDArray[np.float64] = bps.generate_bps_ngrid(
-        bps_grid_length, 2, 0, max_pixel_coord
-    )
+    basis_points_grid: NDArray[np.float64] = bps.generate_bps_ngrid(bps_grid_length, 2, 0, max_pixel_coord)
 
     # dataset
     dataset_directory: str = DEFAULT_DATASET_DIR
@@ -149,6 +137,7 @@ def main(args: argparse.Namespace):
         target_encoding="grid",
         max_num_scene_points=(scene_length**2),
         as_numpy=True,
+        grid_shape_for_grid_basis=(bps_grid_length, bps_grid_length),
     )
 
     # dataloader
@@ -164,15 +153,11 @@ def main(args: argparse.Namespace):
     loop: tqdm = tqdm(dataloader, desc="Reconstructing... ")
     for i, (bps_encoding, target_grid) in enumerate(loop):
         bps_encoding_np = bps_encoding[0].numpy()
-        distance_map: NDArray[np.float64] = interpolate_distance_map(
-            bps_encoding_np, bps_grid_length, scene_length
-        )
+        distance_map: NDArray[np.float64] = interpolate_distance_map(bps_encoding_np, bps_grid_length, scene_length)
         predicted_grid: torch.Tensor = torch.from_numpy(apply_threshold(distance_map))
 
         # have to convert to float bc tensors otherwise get interpreted as bool tensors
-        loss: float = float(
-            criterion(predicted_grid.float(), target_grid[0].float(), reduction="mean")
-        )
+        loss: float = float(criterion(predicted_grid.float(), target_grid[0].float(), reduction="mean"))
         total_loss += loss
 
         visualize_grid_difference(

@@ -13,8 +13,8 @@ from typing import List, cast
 
 # third party imports
 import numpy as np
-from numpy.typing import NDArray
 import torch
+from numpy.typing import NDArray
 from torch.utils.data import Dataset
 
 # import bps from project root
@@ -27,6 +27,7 @@ import bps
 
 # constants
 ArrayLike = NDArray[np.float64] | torch.Tensor
+
 
 class Scenes2dDataset(Dataset):
     """
@@ -43,6 +44,7 @@ class Scenes2dDataset(Dataset):
     memmapped_arrays: List
     file_boundaries: List
     total_samples: int
+    grid_shape_for_grid_basis: None | tuple[int, int]
 
     def __init__(
         self,
@@ -54,6 +56,7 @@ class Scenes2dDataset(Dataset):
         max_num_scene_points: int,
         file_pattern: str = "*.npy",
         as_numpy: bool = False,
+        grid_shape_for_grid_basis: None | tuple[int, int] = None,
     ) -> None:
         """
         Initializes the memory-mapped dataset.
@@ -77,11 +80,17 @@ class Scenes2dDataset(Dataset):
             Pattern to match NPY files (default: "*.npy")
         as_numpy: bool (optional)
             If True, scenes are provided as numpy.ndarray instead of torch.Tensor (default false)
+        grid_shape_for_grid_basis: tuple[int, int]
+            Only relevant if the basis_point_cloud is grid-based and bps_encoding_type == "scalar"
+            Pass the shape of the bps grid here and the resulting bps encoding will be reshaped to be grid-shaped
+            Ideal for working with convolutional models, which can use this for upsampling
         """
         if bps_encoding_type not in ["scalar", "diff"]:
             raise ValueError("bps_encoding_type must be 'scalar' or 'diff'")
         if target_encoding not in ["cloud", "grid"]:
             raise ValueError("target_encoding must be 'cloud' or 'grid'")
+        if grid_shape_for_grid_basis is not None and bps_encoding_type != "scalar":
+            raise ValueError("bps_encoding_type must be 'scalar' to use grid_shape_for_grid_basis")
 
         self.bps_encoding_type = bps_encoding_type
         self.bps = basis_point_cloud
@@ -89,17 +98,14 @@ class Scenes2dDataset(Dataset):
         self.norm_bound_shape = norm_bound_shape
         self.max_num_scene_points = max_num_scene_points
         self.as_numpy = as_numpy
+        self.grid_shape_for_grid_basis = grid_shape_for_grid_basis
 
         # Get all NPY files from the directory
         npy_file_paths = sorted(glob.glob(os.path.join(data_directory, file_pattern)))
         if not npy_file_paths:
-            raise ValueError(
-                f"No NPY files found in {data_directory} with pattern {file_pattern}"
-            )
+            raise ValueError(f"No NPY files found in {data_directory} with pattern {file_pattern}")
         else:
-            print(
-                f"Using the following {len(npy_file_paths)} NPY files for the dataset:"
-            )
+            print(f"Using the following {len(npy_file_paths)} NPY files for the dataset:")
             for filename in npy_file_paths:
                 print(filename)
 
@@ -164,9 +170,7 @@ class Scenes2dDataset(Dataset):
         tuple[int, int]: (file_index, local_index)
         """
         if global_idx >= self.total_samples:
-            raise IndexError(
-                f"Index {global_idx} out of range for dataset of size {self.total_samples}"
-            )
+            raise IndexError(f"Index {global_idx} out of range for dataset of size {self.total_samples}")
 
         # Find which file contains this index
         for file_idx, boundary in enumerate(self.file_boundaries):
@@ -207,9 +211,10 @@ class Scenes2dDataset(Dataset):
 
         # Create BPS encoding
         scene_point_cloud: NDArray[np.float64] = bps.create_point_cloud(scene_occupancy_grid)
-        encoded_result: NDArray[np.float64] = cast(NDArray[np.float64], bps.encode_scene(
-            scene_point_cloud, self.bps, self.bps_encoding_type, self.norm_bound_shape
-        ))
+        encoded_result: NDArray[np.float64] = cast(
+            NDArray[np.float64],
+            bps.encode_scene(scene_point_cloud, self.bps, self.bps_encoding_type, self.norm_bound_shape, self.grid_shape_for_grid_basis),
+        )
 
         bps_encoded_arr: ArrayLike
         if self.as_numpy:
@@ -223,9 +228,7 @@ class Scenes2dDataset(Dataset):
             if self.as_numpy:
                 scene_occupancy_grid_arr = scene_occupancy_grid.astype(np.float64)
             else:
-                scene_occupancy_grid_arr = torch.from_numpy(
-                    scene_occupancy_grid.astype(np.float64)
-                )
+                scene_occupancy_grid_arr = torch.from_numpy(scene_occupancy_grid.astype(np.float64))
             return (bps_encoded_arr, scene_occupancy_grid_arr)
         elif self.target_encoding == "cloud":
             # pad the scene point cloud so tensors stack nicely
@@ -243,9 +246,7 @@ class Scenes2dDataset(Dataset):
             if self.as_numpy:
                 scene_point_cloud_arr = padded_scene_point_cloud.astype(np.float64)
             else:
-                scene_point_cloud_arr = torch.from_numpy(
-                    padded_scene_point_cloud.astype(np.float64)
-                )
+                scene_point_cloud_arr = torch.from_numpy(padded_scene_point_cloud.astype(np.float64))
             num_points_in_scene: int = scene_point_cloud.shape[0]
             return (bps_encoded_arr, scene_point_cloud_arr, num_points_in_scene)
         else:

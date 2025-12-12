@@ -31,7 +31,6 @@ from models.grid2d_decoder02 import BPSOccupancyGrid2dDecoder02
 from models.ptcloud_decoder01 import BPSPointCloudDecoder01
 
 
-
 def load_config(config_path: str):
     """Load a JSON config file as dict"""
     with open(config_path, "r") as f:
