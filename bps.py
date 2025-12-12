@@ -204,9 +204,10 @@ def encode_scene(
             normalized_scene_empty_point_cloud, basis_point_cloud
         )
 
-        # replace instances of 0 (basis point inside object) with negative distance to nearest empty point
+        # if basis point inside object, replace with negative distance to nearest empty point
+        # heuristic for "inside object": closer to a scene point than to an empty point
         for i in range(len(nn_distances)):
-            if nn_distances[i] == 0:
+            if nn_distances[i] < empty_nn_distances[i]:
                 nn_distances[i] = -empty_nn_distances[i]
 
     if encoding_type == "scalar":
