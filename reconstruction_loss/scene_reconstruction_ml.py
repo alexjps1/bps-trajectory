@@ -96,9 +96,7 @@ def main(config_path: Union[str, None] = None):
     basis_point_cloud: np.ndarray
     num_basis_points: int
     if bps_type == "sampling":
-        basis_point_cloud = bps.generate_bps_sampling(
-            sampling_num_basis_points, 2, sampling_shape, 1.0, random_seed=13
-        )
+        basis_point_cloud = bps.generate_bps_sampling(sampling_num_basis_points, 2, sampling_shape, 1.0, random_seed=13)
         num_basis_points = sampling_num_basis_points
     elif bps_type == "grid":
         basis_point_cloud = bps.generate_bps_ngrid(grid_size, 2)
@@ -113,9 +111,7 @@ def main(config_path: Union[str, None] = None):
     max_num_scene_points: int = scene_dims[0] * scene_dims[1]
     if model_type == "cloud":
         model_name = "cloud01"
-        decoder = BPSPointCloudDecoder01(
-            num_basis_points, max_num_scene_points, feature_dim
-        )
+        decoder = BPSPointCloudDecoder01(num_basis_points, max_num_scene_points, feature_dim)
     elif model_type == "grid":
         model_name = "grid02"
         decoder = BPSOccupancyGrid2dDecoder02(
@@ -146,15 +142,9 @@ def main(config_path: Union[str, None] = None):
     )
 
     # dataloaders
-    train_dataloader: DataLoader = DataLoader(
-        dataset=train_dataset, batch_size=batch_size, shuffle=True
-    )
-    val_dataloader: DataLoader = DataLoader(
-        dataset=val_dataset, batch_size=batch_size, shuffle=True
-    )
-    test_dataloader: DataLoader = DataLoader(
-        dataset=test_dataset, batch_size=batch_size, shuffle=True
-    )
+    train_dataloader: DataLoader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
+    val_dataloader: DataLoader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=True)
+    test_dataloader: DataLoader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=True)
 
     # train the model
     print(f"""Training model with the following hyperparameters:

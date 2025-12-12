@@ -45,6 +45,7 @@ class Scenes2dDataset(Dataset):
     file_boundaries: List
     total_samples: int
     grid_shape_for_grid_basis: None | tuple[int, int]
+    bps_encoding_signed: bool
 
     def __init__(
         self,
@@ -57,6 +58,7 @@ class Scenes2dDataset(Dataset):
         file_pattern: str = "*.npy",
         as_numpy: bool = False,
         grid_shape_for_grid_basis: None | tuple[int, int] = None,
+        bps_encoding_signed: bool = False,
     ) -> None:
         """
         Initializes the memory-mapped dataset.
@@ -84,6 +86,10 @@ class Scenes2dDataset(Dataset):
             Only relevant if the basis_point_cloud is grid-based and bps_encoding_type == "scalar"
             Pass the shape of the bps grid here and the resulting bps encoding will be reshaped to be grid-shaped
             Ideal for working with convolutional models, which can use this for upsampling
+        bps_encoding_signed: bool (optional, default False)
+            Only works if bps_encoding_type == "scalar"
+            If True, the basis point cloud encoding will be signed, so basis points inside an object are encoded
+            as negative values to the nearest empty point
         """
         if bps_encoding_type not in ["scalar", "diff"]:
             raise ValueError("bps_encoding_type must be 'scalar' or 'diff'")
@@ -91,6 +97,8 @@ class Scenes2dDataset(Dataset):
             raise ValueError("target_encoding must be 'cloud' or 'grid'")
         if grid_shape_for_grid_basis is not None and bps_encoding_type != "scalar":
             raise ValueError("bps_encoding_type must be 'scalar' to use grid_shape_for_grid_basis")
+        if bps_encoding_signed and bps_encoding_type != "scalar":
+            raise ValueError("bps_encoding_signed can only be used with bps_encoding_type == 'scalar'")
 
         self.bps_encoding_type = bps_encoding_type
         self.bps = basis_point_cloud
@@ -99,6 +107,7 @@ class Scenes2dDataset(Dataset):
         self.max_num_scene_points = max_num_scene_points
         self.as_numpy = as_numpy
         self.grid_shape_for_grid_basis = grid_shape_for_grid_basis
+        self.bps_encoding_signed = bps_encoding_signed
 
         # Get all NPY files from the directory
         npy_file_paths = sorted(glob.glob(os.path.join(data_directory, file_pattern)))
@@ -204,24 +213,53 @@ class Scenes2dDataset(Dataset):
         file_idx, local_idx = self._find_file_and_local_index(idx)
 
         # Load the specific sample (only this sample is loaded into memory)
-        scene_occupancy_grid_raw = self.memmapped_arrays[file_idx][local_idx]
-
-        # Rest of the processing is identical to the original dataset
-        scene_occupancy_grid = (scene_occupancy_grid_raw != 0).astype(int)
-
-        # Create BPS encoding
-        scene_point_cloud: NDArray[np.float64] = bps.create_point_cloud(scene_occupancy_grid)
-        encoded_result: NDArray[np.float64] = cast(
-            NDArray[np.float64],
-            bps.encode_scene(scene_point_cloud, self.bps, self.bps_encoding_type, self.norm_bound_shape, self.grid_shape_for_grid_basis),
+        scene_occupancy_grid: NDArray[np.int64] = cast(
+            NDArray[np.int64], self.memmapped_arrays[file_idx][local_idx].astype(np.int64)
         )
 
+        # Create BPS encoding
+        scene_point_cloud: NDArray[np.float64]
+        scene_empty_point_cloud: NDArray[np.float64] | None = None
+        if self.bps_encoding_signed:
+            # signed encoding requires creating empty point cloud
+            scene_point_cloud, scene_empty_piont_cloud = cast(
+                tuple[NDArray[np.float64], NDArray[np.float64]],
+                bps.create_scene_point_cloud(scene_occupancy_grid, create_empty_cloud=True),
+            )
+            encoded_result = cast(
+                NDArray[np.float64],
+                bps.encode_scene(
+                    scene_point_cloud,
+                    self.bps,
+                    self.bps_encoding_type,
+                    self.norm_bound_shape,
+                    scene_empty_point_cloud=scene_empty_point_cloud,
+                    grid_shape_for_grid_basis=self.grid_shape_for_grid_basis,
+                ),
+            )
+        else:
+            # basic encoding style (not signed)
+            scene_point_cloud = cast(NDArray[np.float64], bps.create_scene_point_cloud(scene_occupancy_grid))
+            encoded_result = cast(
+                NDArray[np.float64],
+                bps.encode_scene(
+                    scene_point_cloud,
+                    self.bps,
+                    self.bps_encoding_type,
+                    self.norm_bound_shape,
+                    scene_empty_point_cloud=None,
+                    grid_shape_for_grid_basis=self.grid_shape_for_grid_basis,
+                ),
+            )
+
+        # desired type of bps encoding
         bps_encoded_arr: ArrayLike
         if self.as_numpy:
             bps_encoded_arr = encoded_result.astype(np.float64)
         else:
             bps_encoded_arr = torch.from_numpy(encoded_result.astype(np.float64))
 
+        # generate target encoding
         if self.target_encoding == "grid":
             # generate grid encoding and return
             scene_occupancy_grid_arr: ArrayLike

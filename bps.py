@@ -18,25 +18,36 @@ BPS FUNCTIONS
 """
 
 
-def create_point_cloud(occupancy_grid: NDArray[np.int64]) -> NDArray[np.float64]:
+def create_scene_point_cloud(
+    occupancy_grid: NDArray[np.int64], create_empty_cloud: bool = False
+) -> NDArray[np.float64] | tuple[NDArray[np.float64], NDArray[np.float64]]:
     """
-    Create point cloud based on the occupancy grid of a scene.
+    Creates two point clouds based on the occupancy grid of a scene.
+    The occupied point cloud contains points where the occupancy grid is non-zero.
+    The empty point cloud contains points where the occupancy grid is zero.
 
     Parameters
     ----------
     occupancy_grid: np.ndarray
         2d or 3d grid of non-zero values for points
+    create_empty_cloud: bool
+        Whether to create an empty point cloud
 
     Returns
     -------
-    np.ndarray
-        2d or 3d points of point cloud
+    occupied_point_cloud: np.ndarray
+        2d or 3d points of occupied point cloud
+    empty_point_cloud: np.ndarray
+        2d or 3d points of empty point cloud
     """
     if occupancy_grid.ndim not in [2, 3]:
         raise ValueError("occupancy_grid is not a 2d or 3d np.ndarray")
     mask: NDArray[np.bool_] = cast(NDArray[np.bool_], occupancy_grid != 0)
-    point_cloud_arr: NDArray[np.float64] = np.argwhere(mask).astype(np.float64)
-    return point_cloud_arr
+    occupied_point_cloud_arr: NDArray[np.float64] = np.argwhere(mask).astype(np.float64)
+    if not create_empty_cloud:
+        return occupied_point_cloud_arr
+    empty_point_cloud_arr: NDArray[np.float64] = np.argwhere(~mask).astype(np.float64)
+    return occupied_point_cloud_arr, empty_point_cloud_arr
 
 
 def generate_bps_sampling(
@@ -131,10 +142,13 @@ def encode_scene(
     basis_point_cloud: NDArray[np.float64],
     encoding_type: str,
     norm_bound_shape: str,
+    scene_empty_point_cloud: None | NDArray[np.float64] = None,
     grid_shape_for_grid_basis: None | tuple[int, int] = None,
 ) -> NDArray[np.float64] | tuple[NDArray[np.float64], NDArray[np.float64]]:
     """
     Returns BPS-encoded ndarray of a scene.
+    If scene_empty_point_cloud is provided, a signed BPS encoding is used (only supported for scalar encoding).
+    This means that the encoding will contain negative values when basis points are inside an object.
 
     Parameters
     ----------
@@ -150,6 +164,9 @@ def encode_scene(
         which shape to use for scene normalization
         use ncube with grid-based BPS or nsphere with random sampling-based BPS
         use none for no normalization at all (don't use this for ML-based scene reconstruction)
+    scene_empty_point_cloud: np.ndarray (optional)
+        Array of 2d or 3d points representing empty space in the scene
+        If this is provided, the encoding will contain negative values when basis points are inside an object
     grid_shape_for_grid_basis: tuple[int, int] (optional)
         Only relevant if the basis_point_cloud is grid-based and encoding_type == "scalar"
         Pass the shape of the bps grid here and the resulting bps encoding will be reshaped to be grid-shaped
@@ -160,18 +177,49 @@ def encode_scene(
     np.ndarray or Tuple[np.ndarray, np.ndarray]
         The BPS-encoded scene
     """
-    normalized_scene_point_cloud: NDArray[np.float64] = _normalize_scene(scene_point_cloud, norm_bound_shape)
+    if scene_empty_point_cloud is not None and encoding_type != "scalar":
+        raise ValueError("scene_empty_point_cloud can only be used with encoding type 'scalar'")
+
+    # normalize the scene cloud and the empty cloud (if provided)
+    normalized_scene_point_cloud: NDArray[np.float64]
+    normalized_scene_empty_point_cloud: None | NDArray[np.float64] = None
+    if scene_empty_point_cloud is not None:
+        normalized_scene_point_cloud, normalized_scene_empty_point_cloud = cast(
+            tuple[NDArray[np.float64], NDArray[np.float64]],
+            _normalize_scene(scene_point_cloud, norm_bound_shape, scene_empty_point_cloud),
+        )
+    else:
+        normalized_scene_point_cloud = cast(NDArray[np.float64], _normalize_scene(scene_point_cloud, norm_bound_shape))
+
+    # do a nearest neighbor query for the scene cloud
     nn_distances: NDArray[np.float64]
     nn_indexes: NDArray[np.int64]
     nn_distances, nn_indexes = _nearest_neighbor_query(normalized_scene_point_cloud, basis_point_cloud)
 
+    # do a nearest neighbor query for the empty cloud (if provided)
+    if normalized_scene_empty_point_cloud is not None:
+        empty_nn_distances: NDArray[np.float64]
+        empty_nn_indexes: NDArray[np.int64]
+        empty_nn_distances, empty_nn_indexes = _nearest_neighbor_query(
+            normalized_scene_empty_point_cloud, basis_point_cloud
+        )
+
+        # replace instances of 0 (basis point inside object) with negative distance to nearest empty point
+        for i in range(len(nn_distances)):
+            if nn_distances[i] == 0:
+                nn_distances[i] = -empty_nn_distances[i]
+
     if encoding_type == "scalar":
+        # return the nearest neighbor distances for scalar bps encoding
         if grid_shape_for_grid_basis is not None:
+            # reshape bps encoding to a grid shape (for cnn models) if provided
             return nn_distances.reshape(grid_shape_for_grid_basis, order="F")
         return nn_distances
     elif encoding_type == "diff":
+        # calculate and return difference vectors for diff bps encoding
         return _calculate_diff_vectors(normalized_scene_point_cloud, basis_point_cloud, nn_indexes)
     elif encoding_type == "both":
+        # return both encoding types if requested
         return (
             nn_distances,
             _calculate_diff_vectors(normalized_scene_point_cloud, basis_point_cloud, nn_indexes),
@@ -185,27 +233,28 @@ HELPER FUNCTIONS
 """
 
 
-def _normalize_scene(scene_point_cloud: NDArray[np.float64], bound_shape: str) -> NDArray[np.float64]:
+def _get_scene_normalization_params(
+    scene_point_cloud: NDArray[np.float64], bound_shape: str
+) -> tuple[NDArray[np.float64], np.float64]:
     """
-    Normalize the scene by centering points and scaling to fit within a unit n-sphere or unit n-cube.
+    Get the centroid and maximum distance from the centroid of a scene.
+    These parameters are necessary to normalize it.
 
     Parameters
     ----------
     scene_point_cloud: np.ndarray
-        2d or 3d points in scene
-    bound_shape: str "ncube" or "nsphere" or "none"
+        2d or 3d opints in scene
+    bound_shape: str "ncube" or "nsphere"
         which shape to use for scene normalization
-        use ncube with grid-based BPS or nsphere with random sampling-based BPS
-        do not use "none" for ML-based scene reconstruction, only for procedural
+        affects how max distance is calculated
 
     Returns
     -------
-    np.ndarray
-        2d or 3d points in normalized scene
+    centroid: np.ndarray
+        Average point coordinates
+    max_distance_from_centroid: np.float64
+        Maximum distance of any point in the cloud from the centroid
     """
-    if bound_shape == "none":
-        return scene_point_cloud.astype(np.float64)
-
     centroid: NDArray[np.float64] = cast(NDArray[np.float64], np.mean(scene_point_cloud, axis=0))
     centered_cloud: NDArray[np.float64] = scene_point_cloud - centroid
 
@@ -216,13 +265,58 @@ def _normalize_scene(scene_point_cloud: NDArray[np.float64], bound_shape: str) -
     elif bound_shape == "ncube":
         max_distance = cast(np.float64, np.max(np.abs(centered_cloud)))
     else:
-        raise ValueError("bound_shape should be 'nsphere' or 'ncube'")
+        raise ValueError("bound_shape must be 'nsphere' or 'ncube'")
 
-    normalized_scene_point_cloud: NDArray[np.float64] = centered_cloud / max_distance
+    return centroid, max_distance
+
+
+def _normalize_scene(
+    scene_point_cloud: NDArray[np.float64], bound_shape: str, scene_empty_point_cloud: None | NDArray[np.float64] = None
+) -> NDArray[np.float64] | tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """
+    Normalize the scene by centering points and scaling to fit within a unit n-sphere or unit n-cube.
+    If a scene_empty_point_cloud is also provided, it will be normalized according to the parameters of the scene point cloud.
+
+    Parameters
+    ----------
+    scene_point_cloud: np.ndarray
+        2d or 3d points in scene
+    bound_shape: str "ncube" or "nsphere" or "none"
+        which shape to use for scene normalization
+        use ncube with grid-based BPS or nsphere with random sampling-based BPS
+        do not use "none" for ML-based scene reconstruction, only for procedural
+    scene_empty_point_cloud: np.ndarray (optional)
+        an empty point cloud which will also be normalized
+        it will be normalized using centroid and max distance of scene_point_cloud, not its own
+
+    Returns
+    -------
+    scene_normalized_point_cloud: np.ndarray
+        2d or 3d points in normalized scene
+    scene_normalized_empty_point_cloud: np.ndarray (optional)
+        2d or 3d points in normalized empty point cloud from scene
+    """
+    if bound_shape == "none":
+        if scene_empty_point_cloud is not None:
+            return scene_point_cloud, scene_empty_point_cloud
+        return scene_point_cloud
+
+    centroid: NDArray[np.float64]
+    max_distance: np.float64
+    centroid, max_distance = _get_scene_normalization_params(scene_point_cloud, bound_shape)
+
+    normalized_scene_point_cloud: NDArray[np.float64] = (scene_point_cloud - centroid) / max_distance
+
+    if scene_empty_point_cloud is not None:
+        normalized_scene_empty_point_cloud: NDArray[np.float64] = (scene_empty_point_cloud - centroid) / max_distance
+        return normalized_scene_point_cloud, normalized_scene_empty_point_cloud
+
     return normalized_scene_point_cloud
 
 
-def _nearest_neighbor_query(scene_point_cloud: NDArray[np.float64], basis_point_cloud: NDArray[np.float64]) -> tuple[NDArray[np.float64], NDArray[np.int64]]:
+def _nearest_neighbor_query(
+    scene_point_cloud: NDArray[np.float64], basis_point_cloud: NDArray[np.float64]
+) -> tuple[NDArray[np.float64], NDArray[np.int64]]:
     """
     Get distances and indices of nearest neighbors to basis points in scene.
 
@@ -278,7 +372,9 @@ def _calculate_diff_vectors(
     return diff_vecs
 
 
-def _random_sampling_nsphere(num_points: int, num_dims: int, radius: float = 1.0, random_seed: int = 13) -> NDArray[np.float64]:
+def _random_sampling_nsphere(
+    num_points: int, num_dims: int, radius: float = 1.0, random_seed: int = 13
+) -> NDArray[np.float64]:
     """
     Get points by sampling uniformly from an n-sphere.
 
@@ -321,7 +417,9 @@ def _random_sampling_nsphere(num_points: int, num_dims: int, radius: float = 1.0
     return x
 
 
-def _random_sampling_ncube(num_points: int, num_dims: int, apothem: float = 1.0, random_seed: int = 13) -> NDArray[np.float64]:
+def _random_sampling_ncube(
+    num_points: int, num_dims: int, apothem: float = 1.0, random_seed: int = 13
+) -> NDArray[np.float64]:
     """
     Get points by sampling uniformly from an n-cube.
 
