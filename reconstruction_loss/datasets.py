@@ -58,7 +58,7 @@ class Scenes2dDataset(Dataset):
         file_pattern: str = "*.npy",
         as_numpy: bool = False,
         grid_shape_for_grid_basis: None | tuple[int, int] = None,
-        bps_encoding_signed: bool = False,
+        bps_encoding_signed: bool = True,
     ) -> None:
         """
         Initializes the memory-mapped dataset.
@@ -222,7 +222,7 @@ class Scenes2dDataset(Dataset):
         scene_empty_point_cloud: NDArray[np.float64] | None = None
         if self.bps_encoding_signed:
             # signed encoding requires creating empty point cloud
-            scene_point_cloud, scene_empty_piont_cloud = cast(
+            scene_point_cloud, scene_empty_point_cloud = cast(
                 tuple[NDArray[np.float64], NDArray[np.float64]],
                 bps.create_scene_point_cloud(scene_occupancy_grid, create_empty_cloud=True),
             )
