@@ -1,0 +1,46 @@
+Run 1 - 2025-12-14 16:22:45.649329
+Parameters: {'bps_settings.grid_size': 8, 'norm_bound_shape': 'ncube'}
+==================================================
+
+Loaded configuration from reconstruction_loss/configs/config_run_001.json
+Using the following 6 NPY files for the dataset:
+/home/alexjps/TrajectoryPlanning/scenes2d/1000_scenes.npy
+/home/alexjps/TrajectoryPlanning/scenes2d/scenes1_64_20_10000_1.npy
+/home/alexjps/TrajectoryPlanning/scenes2d/scenes2_64_20_10000_1.npy
+/home/alexjps/TrajectoryPlanning/scenes2d/scenes3_64_20_10000_1.npy
+/home/alexjps/TrajectoryPlanning/scenes2d/scenes4_64_20_10000_1.npy
+/home/alexjps/TrajectoryPlanning/scenes2d/scenes5_64_20_10000_1.npy
+Total number samples in dataset: 51000
+
+Training model with the following hyperparameters:
+# bps settings
+bps_type: grid
+sampling_shape: ncube
+sampling_num_basis_points: 200
+grid_size: 8
+
+# model type
+model_type: grid
+
+# other hyperparameter settings
+encoding_type: scalar
+encoding_signed: True
+norm_bound_shape: ncube
+batch_size: 64
+num_epochs: 8
+scene_dims: (64, 64))
+
+
+Starting training loop for occupancy grid based decoder
+[Epoch 00/07] Avg Train Loss: 0.4510 | Avg Validation Loss: 0.3898
+[Epoch 01/07] Avg Train Loss: 0.3979 | Avg Validation Loss: 0.3607
+[Epoch 02/07] Avg Train Loss: 0.3802 | Avg Validation Loss: 0.3481
+[Epoch 03/07] Avg Train Loss: 0.3710 | Avg Validation Loss: 0.3417
+              Validation Loss improved from 0.4 to 0.34173826426267623. Saving...
+[Epoch 04/07] Avg Train Loss: 0.3651 | Avg Validation Loss: 0.3359
+[Epoch 05/07] Avg Train Loss: 0.3606 | Avg Validation Loss: 0.3346
+[Epoch 06/07] Avg Train Loss: 0.3578 | Avg Validation Loss: 0.3308
+[Epoch 07/07] Avg Train Loss: 0.3553 | Avg Validation Loss: 0.3283
+
+==================================================
+Return code: 0

@@ -1,0 +1,7 @@
+Run 8 - 2025-12-14 20:02:34.739099
+Parameters: {'bps_settings.grid_size': 64, 'norm_bound_shape': 'none'}
+==================================================
+
+
+==================================================
+TIMEOUT - Training exceeded 30 minutes
