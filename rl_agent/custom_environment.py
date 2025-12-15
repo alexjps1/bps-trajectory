@@ -11,6 +11,7 @@ from PIL import Image
 from tqdm import tqdm
 import torch.nn as nn
 import torch
+import bps
 
 
 class GridEnvCNN(gym.Env):
@@ -18,7 +19,7 @@ class GridEnvCNN(gym.Env):
 
     metadata = {"render_modes": ["human"], "render_fps": 30}
 
-    def __init__(self, grid, start, goal, max_steps, bps = False):
+    def __init__(self, grid, start, goal, max_steps, bps_ = False):
         super().__init__()
         self.grid = np.array(grid, dtype=np.int8)
         self.size = self.grid.shape[0]
@@ -31,9 +32,12 @@ class GridEnvCNN(gym.Env):
         self.agent_position_buffer = [] # stores positions of the agent for early stopping if it does not move for 5 steps
         # self.observation_space = spaces.Box(low=0, high=255, shape=(3, self.size, self.size), dtype=np.uint8)
         self.n_channels = 3
-        self.bps = bps
-        if self.bps:
-            self.bps_encoding = ...
+        self.bps_ = bps_
+        if self.bps_:
+            basis = bps.generate_bps_ngrid(32, 2)
+            full, empty = bps.create_scene_point_cloud(self.grid, create_empty_cloud=True)
+
+            self.bps_encoding = bps.encode_scene(full, basis, "scalar", "none", empty, (32, 32))
             self.size = self.bps_encoding.shape[0]
             self.n_channels = 1
 
@@ -61,7 +65,7 @@ class GridEnvCNN(gym.Env):
 
         self.agent_position_buffer.append(self.agent_position)
 
-        if self.bps:
+        if self.bps_:
             obs = (self.bps_encoding+1)/2 * 255
             obs = obs[np.newaxis, :, :]
         else:
@@ -99,7 +103,7 @@ class GridEnvCNN(gym.Env):
 
 
     def reset(self, seed=None, options=None):
-        if self.bps:
+        if self.bps_:
             obs = (self.bps_encoding+1)/2 * 255
             obs = obs[np.newaxis, :, :]
         else:
