@@ -59,20 +59,18 @@ def train_bps_grid_decoder_2d(
     decoder.train()
     optimizer: optim.Optimizer = optim.Adam(decoder.parameters(), lr=0.001)
     criterion = F.binary_cross_entropy
+    mse_criterion = F.mse_loss
 
     # checkpoint setup
     best_val_loss: float = 0.4
-    checkpoint_path: str = os.path.abspath(
-        "/home/alexjps/TrajectoryPlanning/reconstruction_loss/checkpoints"
-    )
+    checkpoint_path: str = os.path.abspath("/home/alexjps/TrajectoryPlanning/reconstruction_loss/checkpoints")
     checkpoint_filename_prefix: str = f"{model_name}_bps{bps_type.title()}_pts{num_basis_points}_enc{encoding_type.title()}_norm{norm_bound_shape.title()}_bs{batch_size}"
     improvement_threshold: float = 0.05
 
     for epoch in range(num_epochs):
-        loop: tqdm = tqdm(
-            train_dataloader, desc=f"[Epoch {epoch:02d}/{(num_epochs - 1):02d}]"
-        )
+        loop: tqdm = tqdm(train_dataloader, desc=f"[Epoch {epoch:02d}/{(num_epochs - 1):02d}]")
         epoch_loss: float = 0.0
+        epoch_mse: float = 0.0
 
         for i, (bps_encoding, target_grid) in enumerate(loop):
             optimizer.zero_grad()
@@ -83,36 +81,35 @@ def train_bps_grid_decoder_2d(
             # loss and batch loss calculation
             target_grid = target_grid.to(predicted_grid.dtype)
 
-            batch_loss: torch.Tensor = criterion(
-                predicted_grid, target_grid, reduction="mean"
-            )
+            batch_bce: torch.Tensor = criterion(predicted_grid, target_grid, reduction="mean")
+            batch_mse: torch.Tensor = mse_criterion(predicted_grid, target_grid, reduction="mean")
 
-            # backward pass and optimization
-            batch_loss.backward()
+            # backward pass and optimization (still optimizing BCE as before)
+            batch_bce.backward()
             optimizer.step()
 
-            epoch_loss += batch_loss.item()
-            loop.set_postfix(loss=batch_loss.item())
+            epoch_loss += batch_bce.item()
+            epoch_mse += batch_mse.item()
+            loop.set_postfix(bce=batch_bce.item(), mse=batch_mse.item())
 
         avg_train_loss = epoch_loss / len(train_dataloader)
+        avg_train_mse = epoch_mse / len(train_dataloader)
 
         # validation
-        avg_val_loss = evaluate_bps_grid_decoder(
+        avg_val_bce, avg_val_mse = evaluate_bps_grid_decoder(
             decoder,
             val_dataloader,
             f"/home/alexjps/TrajectoryPlanning/reconstruction_loss/images/{model_name}_bps{bps_type.title()}_pts{num_basis_points}_enc{encoding_type.title()}_norm{norm_bound_shape.title()}_bs{batch_size}.png",
         )
         print(
-            f"[Epoch {epoch:02d}/{(num_epochs - 1):02d}] Avg Train Loss: {avg_train_loss:.4f} | Avg Validation Loss: {avg_val_loss:.4f}"
+            f"[Epoch {epoch:02d}/{(num_epochs - 1):02d}] Avg Train BCE: {avg_train_loss:.4f} | Avg Train MSE: {avg_train_mse:.6f} | Avg Validation BCE: {avg_val_bce:.4f} | Avg Validation MSE: {avg_val_mse:.6f}"
         )
 
         # check whether to checkpoint on every even epoch
         if epoch % 2 == 1:
-            if avg_val_loss < best_val_loss - improvement_threshold:
-                print(
-                    f"              Validation Loss improved from {best_val_loss} to {avg_val_loss}. Saving..."
-                )
-                best_val_loss = avg_val_loss
+            if avg_val_bce < best_val_loss - improvement_threshold:
+                print(f"              Validation Loss improved from {best_val_loss} to {avg_val_bce}. Saving...")
+                best_val_loss = avg_val_bce
                 save_filename: str = f"{checkpoint_filename_prefix}_e{epoch}.pt"
                 save_filepath: str = os.path.join(checkpoint_path, save_filename)
                 save_checkpoint(decoder, epoch, optimizer, best_val_loss, save_filepath)
@@ -122,10 +119,12 @@ def evaluate_bps_grid_decoder(
     decoder: nn.Module,
     dataloader: DataLoader,  # either test or validation is OK
     visualization_filepath: str,
-) -> float:
+) -> tuple:
     decoder.eval()
     total_loss: float = 0.0
+    total_mse: float = 0.0
     criterion = F.binary_cross_entropy
+    mse_criterion = F.mse_loss
 
     visualization_generated: bool = False
 
@@ -143,14 +142,18 @@ def evaluate_bps_grid_decoder(
                 )
                 visualization_generated = True
 
-            batch_loss: torch.Tensor = criterion(
-                predicted_grid, target_grid, reduction="mean"
-            )
-            total_loss += batch_loss.item()
+            batch_bce: torch.Tensor = criterion(predicted_grid, target_grid, reduction="mean")
+            batch_mse: torch.Tensor = mse_criterion(predicted_grid, target_grid, reduction="mean")
+            total_loss += batch_bce.item()
+            total_mse += batch_mse.item()
 
     decoder.train()
 
-    return total_loss / len(dataloader)
+    avg_bce = total_loss / len(dataloader)
+    avg_mse = total_mse / len(dataloader)
+    print(f"Validation (Grid Decoder) - Avg BCE: {avg_bce:.6f} | Avg MSE: {avg_mse:.6f}")
+
+    return avg_bce, avg_mse
 
 
 """
@@ -175,17 +178,13 @@ def train_bps_cloud_decoder_2d(
 
     # checkpoint setup
     best_val_loss: float = 500
-    checkpoint_path: str = os.path.abspath(
-        "/home/alexjps/TrajectoryPlanning/reconstruction_loss/checkpoints"
-    )
+    checkpoint_path: str = os.path.abspath("/home/alexjps/TrajectoryPlanning/reconstruction_loss/checkpoints")
     checkpoint_filename_prefix: str = f"{model_name}_bps{bps_type.title()}_pts{num_basis_points}_enc{encoding_type.title()}_norm{norm_bound_shape.title()}_bs{batch_size}"
     improvement_threshold: float = 50
 
     # training loop
     for epoch in range(num_epochs):
-        loop: tqdm = tqdm(
-            train_dataloader, desc=f"[Epoch {epoch:02d}/{(num_epochs - 1):02d}]"
-        )
+        loop: tqdm = tqdm(train_dataloader, desc=f"[Epoch {epoch:02d}/{(num_epochs - 1):02d}]")
 
         epoch_loss: float = 0.0
 
@@ -194,9 +193,7 @@ def train_bps_cloud_decoder_2d(
 
             predicted_cloud: torch.Tensor = decoder(bps_encoding)
 
-            batch_loss: torch.Tensor = torch.tensor(
-                0.0, device=bps_encoding.device, requires_grad=True
-            )
+            batch_loss: torch.Tensor = torch.tensor(0.0, device=bps_encoding.device, requires_grad=True)
             actual_batch_size: int = bps_encoding.size(0)
 
             for j in range(actual_batch_size):
@@ -250,9 +247,7 @@ def train_bps_cloud_decoder_2d(
         # check whether to checkpoint on every even epoch
         if epoch % 2 == 1:
             if avg_val_loss < best_val_loss - improvement_threshold:
-                print(
-                    f"              Validation Loss improved from {best_val_loss} to {avg_val_loss}. Saving..."
-                )
+                print(f"              Validation Loss improved from {best_val_loss} to {avg_val_loss}. Saving...")
                 best_val_loss = avg_val_loss
                 save_filename: str = f"{checkpoint_filename_prefix}_e{epoch}.pt"
                 save_filepath: str = os.path.join(checkpoint_path, save_filename)
@@ -283,9 +278,7 @@ def evaluate_bps_cloud_decoder(
 
                 # try visualization thing
                 if not visualization_generated:
-                    visualize_cloud_difference(
-                        predicted_cloud_j_2d, target_cloud[j], visualization_filepath
-                    )
+                    visualize_cloud_difference(predicted_cloud_j_2d, target_cloud[j], visualization_filepath)
                     visualization_generated = True
 
                 loss_tuple, _ = chamfer_distance(

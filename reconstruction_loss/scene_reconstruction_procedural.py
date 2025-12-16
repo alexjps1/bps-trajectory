@@ -42,7 +42,9 @@ from reconstruction_vis import visualize_grid_difference
 DEFAULT_DATASET_DIR = "/home/alexjps/Dokumente/Uni/ADLR/TrajectoryPlanning/scenes2d"
 
 
-def interpolate_distance_map(bps_grid: NDArray[np.float64], bps_grid_length: int, output_grid_length: int) -> NDArray[np.float64]:
+def interpolate_distance_map(
+    bps_grid: NDArray[np.float64], bps_grid_length: int, output_grid_length: int
+) -> NDArray[np.float64]:
     """
     Creates a distance map of a 2d square grid-based scene by upsampling basis point distances using bilinear interpolation.
     This is the first step in reconstructing a scene procedurally (next, apply a threshold to distance map vals to decide what counts as "occupied")
@@ -69,7 +71,9 @@ def interpolate_distance_map(bps_grid: NDArray[np.float64], bps_grid_length: int
     if bps_grid.shape != (bps_grid_length, bps_grid_length):
         raise ValueError(f"input basis_grid must be square and match given bps_grid_length {bps_grid_length}")
     if bps_grid_length > output_grid_length:
-        raise ValueError(f"bps_grid_length {bps_grid_length} should be smaller or equal to output_grid_length {output_grid_length}")
+        raise ValueError(
+            f"bps_grid_length {bps_grid_length} should be smaller or equal to output_grid_length {output_grid_length}"
+        )
 
     grid_length_scale_factor = output_grid_length / bps_grid_length
 
@@ -106,6 +110,36 @@ def interpolate_distance_map(bps_grid: NDArray[np.float64], bps_grid_length: int
             interpolated_map[x, y] = R1 * (1 - wy) + R2 * wy
 
     return interpolated_map
+
+
+def apply_inversion_and_sigmoid(
+    distance_map: NDArray[np.float64], threshold: float = 0.5, sigmoid_sharpness: float = 50.00
+) -> NDArray[np.float64]:
+    """
+    Transforms the distance map of distances to walls into a probability map in (0, 1) of each cell being a wall.
+    This is done using a sigmoid function.
+
+    Args
+    ----
+    distance_map: NDArray[np.float64]
+        The distance map of distances to walls.
+    threshold: float
+        A decision boundary for values that should be considered walls (0.5 is a good value)
+        Values below this threshold are more wall-like; they are made positive, which the sigmoid function puts closer to 1.
+    sigmoid_sharpness: float
+        The sharpness of the sigmoid function.
+
+    Returns
+    -------
+    NDArray[np.float64]
+        The probability map of each cell being a wall.
+    """
+    z = (threshold - distance_map) * sigmoid_sharpness
+
+    # Apply the Sigmoid function
+    probability_map = 1.0 / (1.0 + np.exp(-z))
+
+    return probability_map
 
 
 def apply_threshold(distance_map: NDArray[np.float64], threshold: float = 0.5) -> NDArray[np.int64]:
