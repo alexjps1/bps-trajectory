@@ -178,9 +178,11 @@ def main(args: argparse.Namespace):
     dataloader: DataLoader = DataLoader(dataset=scenes2d, batch_size=1, shuffle=True)
 
     # loss function
-    criterion = F.binary_cross_entropy
+    bce_criterion = F.binary_cross_entropy
+    mse_criterion = F.mse_loss
 
-    total_loss: float = 0.0
+    total_bce_loss: float = 0.0
+    total_mse_loss: float = 0.0
 
     # this assumes batch size of 1
     bps_encoding_np: NDArray[np.float64]
@@ -191,8 +193,11 @@ def main(args: argparse.Namespace):
         predicted_grid: torch.Tensor = torch.from_numpy(apply_threshold(distance_map))
 
         # have to convert to float bc tensors otherwise get interpreted as bool tensors
-        loss: float = float(criterion(predicted_grid.float(), target_grid[0].float(), reduction="mean"))
-        total_loss += loss
+        cur_bce_loss: float = float(bce_criterion(predicted_grid.float(), target_grid[0].float(), reduction="mean"))
+        cur_mse_loss: float = float(mse_criterion(predicted_grid.float(), target_grid[0].float(), reduction="mean"))
+
+        total_bce_loss += cur_bce_loss
+        total_mse_loss += cur_mse_loss
 
         visualize_grid_difference(
             predicted_grid,
@@ -201,11 +206,13 @@ def main(args: argparse.Namespace):
             save_image=False,
         )
 
-        print(f"loss of {loss}")
+        print(f"loss of {cur_bce_loss}")
 
-    average_loss: float = total_loss / len(scenes2d)
+    avg_bce_loss: float = total_bce_loss / len(scenes2d)
+    avg_mse_loss: float = total_mse_loss / len(scenes2d)
 
-    print(f"The average loss was {average_loss}")
+    print(f"The average BCE loss was {avg_bce_loss}")
+    print(f"The average MSE loss was {avg_mse_loss}")
 
 
 if __name__ == "__main__":
