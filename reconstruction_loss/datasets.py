@@ -26,13 +26,15 @@ sys.path.insert(0, parent_dir)
 import bps
 
 # constants
-ArrayLike = NDArray[np.float64] | torch.Tensor
+ArrayLike = NDArray[np.float64] | NDArray[np.float32] | torch.Tensor
 
 
 class Scenes2dDataset(Dataset):
     """
     Memory-mapped dataset for providing 2d scenes loaded from several NPY files.
     Scenes are provided alongside the ground truth / target encoding of choice (either cloud or grid)
+
+    Note that tensors are provided with dtype torch.float32 (or numpy arrays with dtype np.float32 when as_numpy=True)
     """
 
     basis_point_cloud: NDArray[np.float64]
@@ -255,18 +257,18 @@ class Scenes2dDataset(Dataset):
         # desired type of bps encoding
         bps_encoded_arr: ArrayLike
         if self.as_numpy:
-            bps_encoded_arr = encoded_result.astype(np.float64)
+            bps_encoded_arr = encoded_result.astype(np.float32)
         else:
-            bps_encoded_arr = torch.from_numpy(encoded_result.astype(np.float64))
+            bps_encoded_arr = torch.from_numpy(encoded_result.astype(np.float32))
 
         # generate target encoding
         if self.target_encoding == "grid":
             # generate grid encoding and return
             scene_occupancy_grid_arr: ArrayLike
             if self.as_numpy:
-                scene_occupancy_grid_arr = scene_occupancy_grid.astype(np.float64)
+                scene_occupancy_grid_arr = scene_occupancy_grid.astype(np.float32)
             else:
-                scene_occupancy_grid_arr = torch.from_numpy(scene_occupancy_grid.astype(np.float64))
+                scene_occupancy_grid_arr = torch.from_numpy(scene_occupancy_grid.astype(np.float32))
             return (bps_encoded_arr, scene_occupancy_grid_arr)
         elif self.target_encoding == "cloud":
             # pad the scene point cloud so tensors stack nicely
@@ -282,9 +284,9 @@ class Scenes2dDataset(Dataset):
 
             scene_point_cloud_arr: ArrayLike
             if self.as_numpy:
-                scene_point_cloud_arr = padded_scene_point_cloud.astype(np.float64)
+                scene_point_cloud_arr = padded_scene_point_cloud.astype(np.float32)
             else:
-                scene_point_cloud_arr = torch.from_numpy(padded_scene_point_cloud.astype(np.float64))
+                scene_point_cloud_arr = torch.from_numpy(padded_scene_point_cloud.astype(np.float32))
             num_points_in_scene: int = scene_point_cloud.shape[0]
             return (bps_encoded_arr, scene_point_cloud_arr, num_points_in_scene)
         else:
