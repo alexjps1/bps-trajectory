@@ -54,11 +54,15 @@ def train_bps_grid_decoder_2d(
     bps_type: str,
     model_name: str = "grid",
     batch_size: int = 64,
-    num_epochs: int = 50,
+    num_epochs: int = 8,
 ) -> None:
+    """
+    Train a 2d occupancy-grid decoder.
+    Logs MSE and BCE loss but optimizes on BCE
+    """
     decoder.train()
     optimizer: optim.Optimizer = optim.Adam(decoder.parameters(), lr=0.001)
-    criterion = F.binary_cross_entropy
+    bce_criterion = F.binary_cross_entropy
     mse_criterion = F.mse_loss
 
     # checkpoint setup
@@ -69,47 +73,60 @@ def train_bps_grid_decoder_2d(
 
     for epoch in range(num_epochs):
         loop: tqdm = tqdm(train_dataloader, desc=f"[Epoch {epoch:02d}/{(num_epochs - 1):02d}]")
-        epoch_loss: float = 0.0
-        epoch_mse: float = 0.0
+
+        epoch_bce_loss: float = 0.0
+        epoch_bce_loss_bin: float = 0.0
+        epoch_mse_loss: float = 0.0
+        epoch_mse_loss_bin: float = 0.0
 
         for i, (bps_encoding, target_grid) in enumerate(loop):
             optimizer.zero_grad()
 
             # forward pass
             predicted_grid: torch.Tensor = decoder(bps_encoding)
+            predicted_grid_bin: torch.Tensor = (predicted_grid >= 0.5).float()
 
             # loss and batch loss calculation
-            target_grid = target_grid.to(predicted_grid.dtype)
+            target_grid = target_grid.to(device=predicted_grid.device, dtype=predicted_grid.dtype)
 
-            batch_bce: torch.Tensor = criterion(predicted_grid, target_grid, reduction="mean")
+            batch_bce: torch.Tensor = bce_criterion(predicted_grid, target_grid, reduction="mean")
+            batch_bce_bin: torch.Tensor = bce_criterion(predicted_grid_bin, target_grid, reduction="mean")
             batch_mse: torch.Tensor = mse_criterion(predicted_grid, target_grid, reduction="mean")
+            batch_mse_bin: torch.Tensor = mse_criterion(predicted_grid_bin, target_grid, reduction="mean")
 
-            # backward pass and optimization (still optimizing BCE as before)
+            # backward pass and optimization (optimizing BCE, not MSE)
             batch_bce.backward()
             optimizer.step()
 
-            epoch_loss += batch_bce.item()
-            epoch_mse += batch_mse.item()
-            loop.set_postfix(bce=batch_bce.item(), mse=batch_mse.item())
+            epoch_bce_loss += batch_bce.item()
+            epoch_bce_loss_bin += batch_bce_bin.item()
+            epoch_mse_loss += batch_mse.item()
+            epoch_mse_loss_bin += batch_mse_bin.item()
 
-        avg_train_loss = epoch_loss / len(train_dataloader)
-        avg_train_mse = epoch_mse / len(train_dataloader)
+            loop.set_postfix(bce=batch_bce.item())
+
+        avg_train_bce_loss = epoch_bce_loss / len(train_dataloader)
+        avg_train_bce_loss_bin = epoch_bce_loss_bin / len(train_dataloader)
+        avg_train_mse_loss = epoch_mse_loss / len(train_dataloader)
+        avg_train_mse_loss_bin = epoch_mse_loss_bin / len(train_dataloader)
 
         # validation
-        avg_val_bce, avg_val_mse = evaluate_bps_grid_decoder(
+        avg_val_bce_loss, avg_val_bce_loss_bin, avg_val_mse_loss, avg_val_mse_loss_bin = evaluate_bps_grid_decoder(
             decoder,
             val_dataloader,
             f"/home/alexjps/TrajectoryPlanning/reconstruction_loss/images/{model_name}_bps{bps_type.title()}_pts{num_basis_points}_enc{encoding_type.title()}_norm{norm_bound_shape.title()}_bs{batch_size}.png",
         )
-        print(
-            f"[Epoch {epoch:02d}/{(num_epochs - 1):02d}] Avg Train BCE: {avg_train_loss:.4f} | Avg Train MSE: {avg_train_mse:.6f} | Avg Validation BCE: {avg_val_bce:.4f} | Avg Validation MSE: {avg_val_mse:.6f}"
-        )
+        print(f"""[Epoch {epoch:02d}/{(num_epochs - 1):02d}] | Train | BCE: {avg_train_bce_loss:.6f} | BCE bin: {avg_train_bce_loss_bin:.6f} | MSE: {avg_train_mse_loss:.6f} | MSE bin: {avg_train_mse_loss_bin:.6f}
+[Epoch {epoch:02d}/{(num_epochs - 1):02d}] | Val   | BCE: {avg_val_bce_loss:.6f} | BCE bin: {avg_val_bce_loss_bin:.6f} | MSE: {avg_val_mse_loss:.6f} | MSE bin: {avg_val_mse_loss_bin:.6f}
+""")
 
         # check whether to checkpoint on every even epoch
         if epoch % 2 == 1:
-            if avg_val_bce < best_val_loss - improvement_threshold:
-                print(f"              Validation Loss improved from {best_val_loss} to {avg_val_bce}. Saving...")
-                best_val_loss = avg_val_bce
+            if avg_val_bce_loss < best_val_loss - improvement_threshold:
+                print(
+                    f"              Validation BCE Loss improved from {best_val_loss} to {avg_val_bce_loss}. Saving..."
+                )
+                best_val_loss = avg_val_bce_loss
                 save_filename: str = f"{checkpoint_filename_prefix}_e{epoch}.pt"
                 save_filepath: str = os.path.join(checkpoint_path, save_filename)
                 save_checkpoint(decoder, epoch, optimizer, best_val_loss, save_filepath)
@@ -119,11 +136,15 @@ def evaluate_bps_grid_decoder(
     decoder: nn.Module,
     dataloader: DataLoader,  # either test or validation is OK
     visualization_filepath: str,
-) -> tuple:
+) -> tuple[float, float, float, float]:
     decoder.eval()
-    total_loss: float = 0.0
-    total_mse: float = 0.0
-    criterion = F.binary_cross_entropy
+
+    total_bce_loss: float = 0.0
+    total_bce_loss_bin: float = 0.0
+    total_mse_loss: float = 0.0
+    total_mse_loss_bin: float = 0.0
+
+    bce_criterion = F.binary_cross_entropy
     mse_criterion = F.mse_loss
 
     visualization_generated: bool = False
@@ -131,7 +152,8 @@ def evaluate_bps_grid_decoder(
     with torch.no_grad():
         for bps_encoding, target_grid in dataloader:
             predicted_grid: torch.Tensor = decoder(bps_encoding)
-            target_grid = target_grid.to(predicted_grid.dtype)
+            predicted_grid_bin: torch.Tensor = (predicted_grid >= 0.5).float()
+            target_grid = target_grid.to(device=predicted_grid.device, dtype=predicted_grid.dtype)
 
             if not visualization_generated:
                 visualize_grid_difference(
@@ -142,18 +164,24 @@ def evaluate_bps_grid_decoder(
                 )
                 visualization_generated = True
 
-            batch_bce: torch.Tensor = criterion(predicted_grid, target_grid, reduction="mean")
-            batch_mse: torch.Tensor = mse_criterion(predicted_grid, target_grid, reduction="mean")
-            total_loss += batch_bce.item()
-            total_mse += batch_mse.item()
+            batch_bce_loss: torch.Tensor = bce_criterion(predicted_grid, target_grid, reduction="mean")
+            batch_bce_loss_bin: torch.Tensor = bce_criterion(predicted_grid_bin, target_grid, reduction="mean")
+            batch_mse_loss: torch.Tensor = mse_criterion(predicted_grid, target_grid, reduction="mean")
+            batch_mse_loss_bin: torch.Tensor = mse_criterion(predicted_grid_bin, target_grid, reduction="mean")
+
+            total_bce_loss += batch_bce_loss.item()
+            total_bce_loss_bin += batch_bce_loss_bin.item()
+            total_mse_loss += batch_mse_loss.item()
+            total_mse_loss_bin += batch_mse_loss_bin.item()
 
     decoder.train()
 
-    avg_bce = total_loss / len(dataloader)
-    avg_mse = total_mse / len(dataloader)
-    print(f"Validation (Grid Decoder) - Avg BCE: {avg_bce:.6f} | Avg MSE: {avg_mse:.6f}")
+    avg_bce = total_bce_loss / len(dataloader)
+    avg_bce_bin = total_bce_loss_bin / len(dataloader)
+    avg_mse = total_mse_loss / len(dataloader)
+    avg_mse_bin = total_mse_loss_bin / len(dataloader)
 
-    return avg_bce, avg_mse
+    return avg_bce, avg_bce_bin, avg_mse, avg_mse_bin
 
 
 """

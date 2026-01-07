@@ -206,8 +206,6 @@ def main(args: argparse.Namespace):
             save_image=False,
         )
 
-        print(f"loss of {cur_bce_loss}")
-
     avg_bce_loss: float = total_bce_loss / len(scenes2d)
     avg_mse_loss: float = total_mse_loss / len(scenes2d)
 
