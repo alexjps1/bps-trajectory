@@ -41,6 +41,39 @@ from reconstruction_vis import visualize_grid_difference
 # constants
 DEFAULT_DATASET_DIR = "/home/alexjps/Dokumente/Uni/ADLR/TrajectoryPlanning/scenes2d"
 
+def circle_reconstruct_from_bps(bps_grid, basis_pts, output_grid_length):
+    """
+    Args
+    ----
+    bps_grid: np.ndarray
+        bps encoded grid
+    basis_pts: np.ndarray
+        coordinates of the basis points used for the encoding of bps_grid
+    output_grid_length: int
+        side length of the square scene to be reconstructed
+
+    Returns
+    -------
+    img: np.ndarray
+        reconstructed grid
+    """
+    H = output_grid_length
+    W = output_grid_length
+    img = np.ones((H, W), dtype=float)
+    basis_pts = np.round(basis_pts)
+    yy, xx = np.mgrid[0:H, 0:W]
+    bps_vector = np.ravel(bps_grid)
+
+    for (x, y), value in zip(basis_pts, bps_vector):
+        radius = abs(value)
+        dist = np.sqrt((xx - x)**2 + (yy - y)**2)
+
+        if value < 0:
+            img[dist <= radius] = 1
+        else:
+            img[dist <= radius] = 0
+
+    return img
 
 def interpolate_distance_map(
     bps_grid: NDArray[np.float64], bps_grid_length: int, output_grid_length: int
