@@ -12,6 +12,7 @@ from tqdm import tqdm
 import torch.nn as nn
 import torch
 import bps
+from reconstruction_loss.models.grid2d_decoder02 import BPSOccupancyGrid2dDecoder02
 
 
 class GridEnvCNN(gym.Env):
@@ -37,9 +38,14 @@ class GridEnvCNN(gym.Env):
             basis = bps.generate_bps_ngrid(32, 2)
             full, empty = bps.create_scene_point_cloud(self.grid, create_empty_cloud=True)
 
-            self.bps_encoding = bps.encode_scene(full, basis, "scalar", "none", empty, (32, 32))
-            self.size = self.bps_encoding.shape[0]
-            self.n_channels = 1
+            bps_encoding = bps.encode_scene(full, basis, "scalar", "ncube", empty)
+            bps_encoding = torch.tensor(bps_encoding.T, dtype=torch.float32)
+            num_bp = 32
+            reconstruction_model = BPSOccupancyGrid2dDecoder02(num_bp**2, 1, (64,64))
+            reconstruction_model.load_state_dict(torch.load(f"../reconstruction_loss/checkpoints/grid02_bpsGrid_pts{num_bp**2}_encScalar_normNcube_bs64_e1.pt")['model_state_dict'])
+            reconstruction_model.eval()
+            self.reconstructed_grid = reconstruction_model.forward(bps_encoding).detach().numpy().squeeze()
+
 
         self.observation_space = spaces.Dict({
             "image": spaces.Box(low=0, high=255, shape=(self.n_channels, self.size, self.size), dtype=np.uint8),
@@ -65,15 +71,14 @@ class GridEnvCNN(gym.Env):
 
         self.agent_position_buffer.append(self.agent_position)
 
+        obs = np.zeros((3, self.size, self.size), dtype=np.uint8)
         if self.bps_:
-            obs = (self.bps_encoding+1)/2 * 255
-            obs = obs[np.newaxis, :, :]
+            obs[0] = self.reconstructed_grid       # obstacles
         else:
-            obs = np.zeros((3, self.size, self.size), dtype=np.uint8)
             obs[0] = (self.grid == 1).astype(np.uint8)        # obstacles
-            obs[1, self.goal[0], self.goal[1]] = 1              # goal
-            obs[2, self.agent_position[0], self.agent_position[1]] = 1  # agent
-            obs *= 255
+        obs[1, self.goal[0], self.goal[1]] = 1              # goal
+        obs[2, self.agent_position[0], self.agent_position[1]] = 1  # agent
+        obs *= 255
 
         
         # early stopping if the agent stays at the same position for 5 steps
@@ -103,15 +108,14 @@ class GridEnvCNN(gym.Env):
 
 
     def reset(self, seed=None, options=None):
+        obs = np.zeros((3, self.size, self.size), dtype=np.uint8)
         if self.bps_:
-            obs = (self.bps_encoding+1)/2 * 255
-            obs = obs[np.newaxis, :, :]
+            obs[0] = self.reconstructed_grid       # obstacles
         else:
-            obs = np.zeros((3, self.size, self.size), dtype=np.uint8)
             obs[0] = (self.grid == 1).astype(np.uint8)        # obstacles
-            obs[1, self.goal[0], self.goal[1]] = 1              # goal
-            obs[2, self.start[0], self.start[1]] = 1  # agent  # agent
-            obs *= 255
+        obs[1, self.goal[0], self.goal[1]] = 1              # goal
+        obs[2, self.start[0], self.start[1]] = 1  # agent  # agent
+        obs *= 255
 
         # observation = obs[np.newaxis, :, :] # shape to (1, Size, Size)
         self.agent_position = list(self.start)
