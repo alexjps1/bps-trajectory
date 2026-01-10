@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import sys
+from enum import EnumType
 from typing import Union
 
 # third party imports
@@ -58,6 +59,7 @@ def main(config_path: Union[str, None] = None):
             },
             "training": {
                 "encoding_type": "diff",  # diff or scalar
+                "encoding_signed": True,
                 "norm_bound_shape": "ncube",  # ncube or sphere
                 "batch_size": 64,
                 "num_epochs": 5,
@@ -82,6 +84,7 @@ def main(config_path: Union[str, None] = None):
     num_conv_layers = config["model"]["num_conv_layers"]
 
     encoding_type = config["training"]["encoding_type"]
+    encoding_signed = config["training"]["encoding_signed"]
     norm_bound_shape = config["training"]["norm_bound_shape"]
     batch_size = config["training"]["batch_size"]
     num_epochs = config["training"]["num_epochs"]
@@ -128,6 +131,7 @@ def main(config_path: Union[str, None] = None):
         norm_bound_shape,
         model_type,
         max_num_scene_points,
+        bps_encoding_signed=encoding_signed,
     )
 
     # data split
@@ -159,6 +163,7 @@ model_type: {model_type}
 
 # other hyperparameter settings
 encoding_type: {encoding_type}
+encoding_signed: {encoding_signed}
 norm_bound_shape: {norm_bound_shape}
 batch_size: {batch_size}
 num_epochs: {num_epochs}

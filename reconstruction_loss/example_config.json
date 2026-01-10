@@ -1,6 +1,6 @@
 {
     "bps_settings": {
-        "bps_type": "sampling",
+        "bps_type": "grid",
         "sampling_shape": "ncube",
         "sampling_num_basis_points": 200,
         "grid_size": 32
@@ -11,9 +11,10 @@
     },
     "training": {
         "encoding_type": "scalar",
+        "encoding_signed": true,
         "norm_bound_shape": "ncube",
         "batch_size": 64,
-        "num_epochs": 5,
+        "num_epochs": 8,
         "scene_dims": [64, 64]
     },
     "data": {

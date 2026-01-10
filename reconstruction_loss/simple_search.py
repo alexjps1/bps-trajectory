@@ -50,7 +50,8 @@ def run_training(config_path, run_id, param_values):
     # Run command
     cmd = [
         "python3",
-        "reconstruction_loss/reconstruction_loss.py",
+        "-u",
+        "reconstruction_loss/scene_reconstruction_ml.py",
         "--config",
         config_path,
     ]
@@ -113,8 +114,8 @@ def main():
     # DEFINE SEARCH PARAMETERS HERE
     # ==============================================
     search_params = {
-        "bps_settings.sampling_num_basis_points": [1024, 256, 64],
-        "training.encoding_type": ["diff", "scalar"],
+        "bps_settings.grid_size": [8, 16, 32, 64],
+        "norm_bound_shape": ["ncube", "none"],
     }
     # ==============================================
 
@@ -132,6 +133,8 @@ def main():
     # Create directories
     os.makedirs("reconstruction_loss/logs", exist_ok=True)
     os.makedirs("reconstruction_loss/configs", exist_ok=True)
+    os.makedirs("reconstruction_loss/images", exist_ok=True)
+    os.makedirs("reconstruction_loss/checkpoints", exist_ok=True)
 
     # Confirm
     response = input("Continue? (y/n): ")

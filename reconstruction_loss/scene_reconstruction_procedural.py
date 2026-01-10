@@ -42,7 +42,9 @@ from reconstruction_vis import visualize_grid_difference
 DEFAULT_DATASET_DIR = "/home/alexjps/Dokumente/Uni/ADLR/TrajectoryPlanning/scenes2d"
 
 
-def interpolate_distance_map(bps_grid: NDArray[np.float64], bps_grid_length: int, output_grid_length: int) -> NDArray[np.float64]:
+def interpolate_distance_map(
+    bps_grid: NDArray[np.float64], bps_grid_length: int, output_grid_length: int
+) -> NDArray[np.float64]:
     """
     Creates a distance map of a 2d square grid-based scene by upsampling basis point distances using bilinear interpolation.
     This is the first step in reconstructing a scene procedurally (next, apply a threshold to distance map vals to decide what counts as "occupied")
@@ -69,7 +71,9 @@ def interpolate_distance_map(bps_grid: NDArray[np.float64], bps_grid_length: int
     if bps_grid.shape != (bps_grid_length, bps_grid_length):
         raise ValueError(f"input basis_grid must be square and match given bps_grid_length {bps_grid_length}")
     if bps_grid_length > output_grid_length:
-        raise ValueError(f"bps_grid_length {bps_grid_length} should be smaller or equal to output_grid_length {output_grid_length}")
+        raise ValueError(
+            f"bps_grid_length {bps_grid_length} should be smaller or equal to output_grid_length {output_grid_length}"
+        )
 
     grid_length_scale_factor = output_grid_length / bps_grid_length
 
@@ -108,6 +112,36 @@ def interpolate_distance_map(bps_grid: NDArray[np.float64], bps_grid_length: int
     return interpolated_map
 
 
+def apply_inversion_and_sigmoid(
+    distance_map: NDArray[np.float64], threshold: float = 0.5, sigmoid_sharpness: float = 50.00
+) -> NDArray[np.float64]:
+    """
+    Transforms the distance map of distances to walls into a probability map in (0, 1) of each cell being a wall.
+    This is done using a sigmoid function.
+
+    Args
+    ----
+    distance_map: NDArray[np.float64]
+        The distance map of distances to walls.
+    threshold: float
+        A decision boundary for values that should be considered walls (0.5 is a good value)
+        Values below this threshold are more wall-like; they are made positive, which the sigmoid function puts closer to 1.
+    sigmoid_sharpness: float
+        The sharpness of the sigmoid function.
+
+    Returns
+    -------
+    NDArray[np.float64]
+        The probability map of each cell being a wall.
+    """
+    z = (threshold - distance_map) * sigmoid_sharpness
+
+    # Apply the Sigmoid function
+    probability_map = 1.0 / (1.0 + np.exp(-z))
+
+    return probability_map
+
+
 def apply_threshold(distance_map: NDArray[np.float64], threshold: float = 0.5) -> NDArray[np.int64]:
     """
     Given a distance map of an upsampled 2d square grid scene, apply the threshold to decide which grid cells are occupied.
@@ -144,9 +178,11 @@ def main(args: argparse.Namespace):
     dataloader: DataLoader = DataLoader(dataset=scenes2d, batch_size=1, shuffle=True)
 
     # loss function
-    criterion = F.binary_cross_entropy
+    bce_criterion = F.binary_cross_entropy
+    mse_criterion = F.mse_loss
 
-    total_loss: float = 0.0
+    total_bce_loss: float = 0.0
+    total_mse_loss: float = 0.0
 
     # this assumes batch size of 1
     bps_encoding_np: NDArray[np.float64]
@@ -157,8 +193,11 @@ def main(args: argparse.Namespace):
         predicted_grid: torch.Tensor = torch.from_numpy(apply_threshold(distance_map))
 
         # have to convert to float bc tensors otherwise get interpreted as bool tensors
-        loss: float = float(criterion(predicted_grid.float(), target_grid[0].float(), reduction="mean"))
-        total_loss += loss
+        cur_bce_loss: float = float(bce_criterion(predicted_grid.float(), target_grid[0].float(), reduction="mean"))
+        cur_mse_loss: float = float(mse_criterion(predicted_grid.float(), target_grid[0].float(), reduction="mean"))
+
+        total_bce_loss += cur_bce_loss
+        total_mse_loss += cur_mse_loss
 
         visualize_grid_difference(
             predicted_grid,
@@ -167,11 +206,11 @@ def main(args: argparse.Namespace):
             save_image=False,
         )
 
-        print(f"loss of {loss}")
+    avg_bce_loss: float = total_bce_loss / len(scenes2d)
+    avg_mse_loss: float = total_mse_loss / len(scenes2d)
 
-    average_loss: float = total_loss / len(scenes2d)
-
-    print(f"The average loss was {average_loss}")
+    print(f"The average BCE loss was {avg_bce_loss}")
+    print(f"The average MSE loss was {avg_mse_loss}")
 
 
 if __name__ == "__main__":
