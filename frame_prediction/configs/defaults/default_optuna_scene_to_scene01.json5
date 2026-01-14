@@ -16,7 +16,7 @@
     },
     "optimization": {
         "n_trials": 50,
-        "timeout_seconds": 3600  // one hour
+        "timeout_seconds": 7200  // two hours
     },
     "run": {  // mirrors the structure of the singlerun config file
         "model": {
@@ -24,11 +24,11 @@
                 "hidden_dim": {
                     "type": "categorical",
                     "vals": [128, 256, 512, 1024] // categorical means optuna will pick one of these vals
-                }
+                },
                 "num_lstm_layers": {  // increasing beyond 2 not recommneded
                     "type": "constant",  // no tuning
                     "vals": 2
-                }
+                },
                 "dropout_rate": {
                     "type": "float",
                     "vals": [0.0, 0.5]  // float means optuna can pick anything in this range
@@ -44,8 +44,8 @@
                 // tunable
                 "batch_size": {
                     "type": "categorical",
-                    "vals" [16, 32, 64],
-                }
+                    "vals": [16, 32, 64],
+                },
                 "learning_rate": {
                     "type": "float",
                     "vals": [0.0001, 0.01], // optimizer is Adam
