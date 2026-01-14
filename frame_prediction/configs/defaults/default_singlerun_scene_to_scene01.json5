@@ -6,7 +6,7 @@
         "dropout_rate": 0.2
     },
     "training": {
-        "num_epochs": 20,  // num epochs after which to stop
+        "num_epochs": 40,  // num epochs after which to stop
         "epochs_between_evals": 5,  // e.g. evaluate performance every 5 epochs
         "frame_dims": [64, 64],
         "checkpoint_dir": "checkpoints",  // where to save model state dicts; relative to "./frame_prediction/runs/training_run_name/"

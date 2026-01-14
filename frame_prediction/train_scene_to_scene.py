@@ -32,7 +32,7 @@ PROJECT_ROOT_DIR = THIS_DIR.parent
 
 def objective(
     trial: Trial,
-    config: dict,
+    search_space_config: dict,
     train_dataloader: DataLoader,
     val_dataloader: DataLoader,
     device: torch.device,
@@ -44,8 +44,9 @@ def objective(
     ----------
     trial: Trial
         Optuna trial object for suggesting hyperparameters
-    config: dict
-        Base configuration with fixed parameters
+    serach_space_config: dict
+        Base run configuration with hyperparameter types and acceptable value lists/ranges
+        Has similar formatting to the single run config, contained in the "run" attribute of an optuna study config JSON.
     train_dataloader: DataLoader
         Training data loader
     val_dataloader: DataLoader
@@ -59,7 +60,7 @@ def objective(
         Validation BCE loss (lower is better)
     """
     # Suggest hyperparameters
-    hyperparams = suggest_hyperparams(trial, config)
+    hyperparams = suggest_hyperparams(trial, search_space_config)
     hidden_dim = hyperparams["hidden_dim"]
     num_lstm_layers = hyperparams["num_lstm_layers"]
     dropout_rate = hyperparams["dropout_rate"]
@@ -67,13 +68,13 @@ def objective(
     batch_size = hyperparams["batch_size"]
 
     # Extract fixed parameters from config
-    data_config = config["data"]
-    training_config = config["training"]
+    data_config = search_space_config["data"]
+    training_config = search_space_config["training"]
     num_input_frames = data_config["num_input_frames"]
     num_target_frames = data_config["num_target_frames"]
     frame_dims = tuple(training_config["frame_dims"])
     num_epochs = training_config["num_epochs"]
-    training_run_name = config.get("training_run_name", "optuna")
+    training_run_name = search_space_config.get("training_run_name", "optuna")
     checkpoint_dir = (
         PROJECT_ROOT_DIR / "frame_prediction" / "runs" / training_run_name / training_config["checkpoint_dir"]
     )
@@ -100,14 +101,13 @@ def objective(
     model = model.to(device)
 
     # print info about the current run to the console
-    trial_run_config = copy.deepcopy(config)
+    trial_run_config = copy.deepcopy(search_space_config)
     trial_run_config["model"]["hidden_dim"] = hidden_dim
     trial_run_config["model"]["num_lstm_layers"] = num_lstm_layers
     trial_run_config["model"]["dropout_rate"] = dropout_rate
     trial_run_config["training"]["batch_size"] = batch_size
     trial_run_config["training"]["learning_rate"] = learning_rate
     trial_run_config["training"]["num_epochs"] = num_epochs
-    trial_run_config["training"]["epochs_between_evals"] = 1
     print_run_config(f"[Trial {trial.number}] hyperparameters", trial_run_config)
     print(f"[Trial {trial.number}] Model parameters: {model.get_parameter_count():,}")
 
@@ -196,7 +196,7 @@ def get_dataset(run_config: dict) -> DynamicScenes2dDataset:
     """
     data_config = run_config["data"]
     dataset = DynamicScenes2dDataset(
-        data_directory=(PROJECT_ROOT_DIR / "frame_generation" / data_config["data_directory"]),
+        data_directory=(PROJECT_ROOT_DIR / "frame_prediction" / data_config["data_directory"]),
         as_numpy=False,
         num_input_frames=data_config["num_input_frames"],
         num_target_frames=data_config["num_target_frames"],
@@ -501,7 +501,7 @@ if __name__ == "__main__":
         type=Path,
         metavar="FILE",
         help="Path to json file with configuration for one training run.",
-        required=True,
+        required=False,
     )
     group.add_argument(
         "--study",
@@ -513,5 +513,11 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+
+    if not (args.train or args.study):
+        raise ValueError("Must provide a config file, either as --train or as --study")
+
+    if args.train and args.study:
+        raise ValueError("Cannot provide two config files.")
 
     main(args.train, args.study)
