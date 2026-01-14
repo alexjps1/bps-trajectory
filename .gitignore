@@ -13,3 +13,4 @@ sftp-config.json
 pyrightconfig.json
 ruff.toml
 runs
+ignore

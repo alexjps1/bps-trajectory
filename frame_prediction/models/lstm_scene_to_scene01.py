@@ -20,7 +20,7 @@ PRECISION = np.float32
 
 class LSTMSceneToScene01(nn.Module):
     """
-    LSTM-based model for predicting the next frame in a sequence of 2D scenes.
+    LSTM-based model for predicting the next frame in a 2D dynamic scene consisting of a sequence of frames.
 
     Architecture:
         - Encoder: flatten each frame
@@ -28,14 +28,12 @@ class LSTMSceneToScene01(nn.Module):
         - Decoder: linear layer to predict next frame
     """
 
-    num_input_frames: int
     frame_dims: Tuple[int, int]
     hidden_dim: int
     num_lstm_layers: int
 
     def __init__(
         self,
-        num_input_frames: int,
         frame_dims: Tuple[int, int] = (64, 64),
         hidden_dim: int = 512,
         num_lstm_layers: int = 2,
@@ -46,8 +44,6 @@ class LSTMSceneToScene01(nn.Module):
 
         Parameters
         ----------
-        num_input_frames: int
-            Number of input frames in the sequence (n frames to predict n+1)
         frame_dims: Tuple[int, int]
             Dimensions of each frame (height, width)
         hidden_dim: int
@@ -60,7 +56,6 @@ class LSTMSceneToScene01(nn.Module):
         super(LSTMSceneToScene01, self).__init__()
 
         # set attributes
-        self.num_input_frames = num_input_frames
         self.frame_dims = frame_dims
         self.hidden_dim = hidden_dim
         self.num_lstm_layers = num_lstm_layers
@@ -149,10 +144,13 @@ class LSTMSceneToScene01(nn.Module):
             predictions.append(next_frame.unsqueeze(1))
 
             # update sequence: drop oldest frame, append prediction
-            current_sequence = torch.cat([
-                current_sequence[:, 1:, :, :],
-                next_frame.unsqueeze(1),
-            ], dim=1)
+            current_sequence = torch.cat(
+                [
+                    current_sequence[:, 1:, :, :],
+                    next_frame.unsqueeze(1),
+                ],
+                dim=1,
+            )
 
         return torch.cat(predictions, dim=1)
 

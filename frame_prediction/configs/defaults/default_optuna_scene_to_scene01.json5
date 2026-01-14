@@ -1,0 +1,66 @@
+{
+    "study": {
+        "name": "default_scene_to_scene01",
+        "direction": "minimize",  // lower objective values are better
+        "storage": "sqlite.db", // sqlite filename, relative to "./frame_prediction/runs/optuna_storage"
+        "load_if_exists": true
+    },
+    "sampler": {  // decides which hyperparameter permutations to try next
+        "type": "tpe",
+        "seed": 42
+    },
+    "pruner": {  // kills poorly performing runs
+        "type": "median",
+        "n_startup_trials": 10,  // number of trials at the start which will not be pruned even if poor performance
+        "n_warmup_steps": 5  // num steps within a trial before pruning is allowed
+    },
+    "optimization": {
+        "n_trials": 50,
+        "timeout_seconds": 3600  // one hour
+    },
+    "run": {  // mirrors the structure of the singlerun config file
+        "model": {
+                // tunable
+                "hidden_dim": {
+                    "type": "categorical",
+                    "vals": [128, 256, 512, 1024] // categorical means optuna will pick one of these vals
+                }
+                "num_lstm_layers": {  // increasing beyond 2 not recommneded
+                    "type": "constant",  // no tuning
+                    "vals": 2
+                }
+                "dropout_rate": {
+                    "type": "float",
+                    "vals": [0.0, 0.5]  // float means optuna can pick anything in this range
+                }
+        },
+        "training": {
+                // not tunable
+                "num_epochs": 40,    // num epochs after which to stop
+                "epochs_between_evals": 5,    // e.g. evaluate performance every 5 epochs
+                "frame_dims": [64, 64],
+                "checkpoint_dir": "checkpoints",    // where to save model state dicts; relative to "./frame_prediction/runs/training_run_name/"
+
+                // tunable
+                "batch_size": {
+                    "type": "categorical",
+                    "vals" [16, 32, 64],
+                }
+                "learning_rate": {
+                    "type": "float",
+                    "vals": [0.0001, 0.01], // optimizer is Adam
+                    "log": true
+                }
+        },
+        "data": {
+                // not tunable
+                "data_directory": "dynamic_scenes2d",  // relative to "./frame_prediction"
+                "file_pattern": "*.npy",
+                "num_input_frames": 20,    // num frames given as input
+                "num_target_frames": 1,    // num frames to predict (autoregresively if >1)
+                "train_split": 0.7,
+                "val_split": 0.1,
+                "random_seed": 42    // used for dataset split
+        }
+    }
+}
