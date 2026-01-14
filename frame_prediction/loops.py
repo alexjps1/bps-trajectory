@@ -15,6 +15,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+
+# first party imports
+from prediction_vis import visualize_grid_difference
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -51,6 +54,7 @@ def train_scene_to_scene(
     epochs_between_evals: int = 1,
     learning_rate: float = 0.001,
     checkpoint_dir: str = "checkpoints",
+    training_run_name: str = "default",
     trial: Any | None = None,
 ) -> float:
     """
@@ -151,6 +155,9 @@ def train_scene_to_scene(
                 val_dataloader,
                 num_target_frames,
                 device,
+                epoch=epoch,
+                training_run_name=training_run_name,
+                max_visualizations=3,
             )
             print(
                 f"[Epoch {epoch:02d}/{(num_epochs - 1):02d}] | Train | BCE: {avg_train_bce_loss:.6f} | BCE bin: {avg_train_bce_loss_bin:.6f} | MSE: {avg_train_mse_loss:.6f} | MSE bin: {avg_train_mse_loss_bin:.6f}\n"
@@ -183,6 +190,9 @@ def evaluate_scene_to_scene(
     dataloader: DataLoader,
     num_target_frames: int,
     device: torch.device = torch.device("cpu"),
+    epoch: int | None = None,
+    training_run_name: str = "default",
+    max_visualizations: int = 0,
 ) -> tuple[float, float, float, float]:
     """
     Evaluate a scene-to-scene frame prediction model.
@@ -213,6 +223,13 @@ def evaluate_scene_to_scene(
     bce_criterion = F.binary_cross_entropy
     mse_criterion = F.mse_loss
 
+    base_images_dir = os.path.join(os.path.dirname(__file__), "runs", "images", training_run_name)
+    should_visualize = max_visualizations > 0 and epoch is not None and epoch % 5 == 0
+    if should_visualize:
+        os.makedirs(base_images_dir, exist_ok=True)
+
+    saved_visualizations = 0
+
     with torch.no_grad():
         for input_frames, target_frames in dataloader:
             # move data to device
@@ -221,6 +238,23 @@ def evaluate_scene_to_scene(
 
             predicted_frames: torch.Tensor = model.forward_multi_step(input_frames, num_target_frames)
             predicted_frames_bin: torch.Tensor = (predicted_frames >= 0.5).float()
+
+            if should_visualize and saved_visualizations < max_visualizations:
+                batch_size = predicted_frames.size(0)
+                for batch_idx in range(batch_size):
+                    if saved_visualizations >= max_visualizations:
+                        break
+                    epoch_dir = os.path.join(base_images_dir, f"epoch_{epoch:03d}")
+                    os.makedirs(epoch_dir, exist_ok=True)
+                    image_filename = f"{training_run_name}_epoch{epoch:03d}_sample{saved_visualizations:02d}.png"
+                    image_path = os.path.join(epoch_dir, image_filename)
+                    visualize_grid_difference(
+                        predicted_frames[batch_idx, 0],
+                        target_frames[batch_idx, 0],
+                        show_window=False,
+                        output_path=image_path,
+                    )
+                    saved_visualizations += 1
 
             batch_bce_loss: torch.Tensor = bce_criterion(predicted_frames, target_frames, reduction="mean")
             batch_bce_loss_bin: torch.Tensor = bce_criterion(predicted_frames_bin, target_frames, reduction="mean")

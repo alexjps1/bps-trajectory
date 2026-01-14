@@ -126,6 +126,7 @@ def objective(
         epochs_between_evals=1,
         learning_rate=learning_rate,
         checkpoint_dir=str(checkpoint_dir),
+        training_run_name=training_run_name,
         trial=trial,
     )
 
@@ -325,6 +326,7 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
         epochs_between_evals=training_config["epochs_between_evals"],
         learning_rate=training_config["learning_rate"],
         checkpoint_dir=str(checkpoint_dir),
+        training_run_name=training_run_name,
     )
 
     print("\nEvaluating on test set...")
@@ -454,6 +456,7 @@ pruner: {pruner_type}
         epochs_between_evals=cast(int, resolve_config_value(training_config["epochs_between_evals"])),
         learning_rate=best_params["learning_rate"],
         checkpoint_dir=training_config["checkpoint_dir"],
+        training_run_name=study_name,
     )
 
     # Final evaluation on test set
