@@ -1,4 +1,3 @@
-.gitignore
 /environment_generation/environments
 /rl_agent/rl_agent_static_tensorboard
 /rl_agent/models
@@ -8,3 +7,9 @@ __pycache__/
 *sublime-workspace
 cpython*pyc
 sftp-config.json
+.pytest_cache
+.idea
+.zed
+pyrightconfig.json
+ruff.toml
+runs
