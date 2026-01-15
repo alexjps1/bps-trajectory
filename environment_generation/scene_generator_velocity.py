@@ -630,6 +630,7 @@ def generate_training_data(
     """
     scenes_list = []
     for i in range(n_envs):
+        print(f"Generating scene {i}/{n_envs} of file {iter}...")
         scene = random_object_dynamic_env(env_size, n_objects, n_frames, encode_velocity, velocity_unitvec)
 
         # DEBUG, this block can be removed later if desired
@@ -677,12 +678,13 @@ def main() -> None:
     -------
     None
     """
-    for iter in range(10):
-        print(f"Generating file {iter + 1}/10...")
+    num_files_to_generate = 10
+    for iter in range(num_files_to_generate):
+        print(f"Generating file {iter}... (generating {num_files_to_generate} files total)")
         generate_training_data(
             env_size=(64, 64),
             n_objects=10,
-            n_envs=1,
+            n_envs=1000,
             n_frames=100,
             iter=iter,
             encode_velocity=True,
