@@ -18,14 +18,14 @@ import torch.nn as nn
 PRECISION = np.float32
 
 class ConvLSTMCell(nn.Module):
-    def __init__(self, input_channels, hidden_channels, kernel_size):
+    def __init__(self, input_channels, hidden_dim, kernel_size):
         super().__init__()
         padding = kernel_size // 2
-        self.hidden_channels = hidden_channels
+        self.hidden_dim = hidden_dim
 
         self.conv = nn.Conv2d(
-            input_channels + hidden_channels,
-            4 * hidden_channels,
+            input_channels + hidden_dim,
+            4 * hidden_dim,
             kernel_size,
             padding=padding,
         )
@@ -34,7 +34,7 @@ class ConvLSTMCell(nn.Module):
         combined = torch.cat([x, h], dim=1)
         conv_out = self.conv(combined)
 
-        i, f, o, g = torch.split(conv_out, self.hidden_channels, dim=1)
+        i, f, o, g = torch.split(conv_out, self.hidden_dim, dim=1)
 
         i = torch.sigmoid(i) # input gate
         f = torch.sigmoid(f) # forget gate
@@ -47,16 +47,17 @@ class ConvLSTMCell(nn.Module):
         return h_next, c_next
     
 class ConvLSTM(nn.Module):
-    def __init__(self, input_channels, hidden_channels, kernel_size):
+    def __init__(self, input_channels, hidden_dim, kernel_size):
         super().__init__()
-        self.cell = ConvLSTMCell(input_channels, hidden_channels, kernel_size)
-        self.hidden_channels = hidden_channels
+        self.cell = ConvLSTMCell(input_channels, hidden_dim, kernel_size)
+        self.hidden_dim = hidden_dim
 
     def forward(self, x):
         # x: (B, T, C, H, W)
+
         B, T, C, H, W = x.shape
 
-        h = torch.zeros(B, self.hidden_channels, H, W, device=x.device)
+        h = torch.zeros(B, self.hidden_dim, H, W, device=x.device)
         c = torch.zeros_like(h)
 
         outputs = []
@@ -68,14 +69,14 @@ class ConvLSTM(nn.Module):
         return torch.cat(outputs, dim=1), (h, c)
 
 class StackedConvLSTM(nn.Module):
-    def __init__(self, input_channels: int, hidden_channels: int, kernel_size: int, num_layers: int):
+    def __init__(self, input_channels: int, hidden_dim: int, kernel_size: int, num_layers: int):
         super().__init__()
         self.num_layers = num_layers
         self.layers = nn.ModuleList()
 
         for i in range(num_layers):
-            in_ch = input_channels if i == 0 else hidden_channels
-            self.layers.append(ConvLSTM(in_ch, hidden_channels, kernel_size))
+            in_ch = input_channels if i == 0 else hidden_dim
+            self.layers.append(ConvLSTM(in_ch, hidden_dim, kernel_size))
 
     def forward(self, x):
         # x: (B, T, C, H, W)
@@ -98,14 +99,14 @@ class LSTMSceneToScene02(nn.Module):
     """
 
     frame_dims: Tuple[int, int]
-    hidden_channels: int
+    hidden_dim: int
     num_lstm_layers: int
 
     def __init__(
         self,
         frame_dims: Tuple[int, int] = (64, 64),
         in_channels: int = 1,
-        hidden_channels: int = 64,
+        hidden_dim: int = 64,
         num_lstm_layers: int = 2,
         kernel_size: int = 3,
     ):
@@ -131,14 +132,14 @@ class LSTMSceneToScene02(nn.Module):
         # set attributes
         self.frame_dims = frame_dims
         self.in_channels = in_channels
-        self.hidden_channels = hidden_channels
+        self.hidden_dim = hidden_dim
         self.num_lstm_layers = num_lstm_layers
         self.kernel_size = kernel_size
 
 
-        self.convLSTM = StackedConvLSTM(in_channels, hidden_channels, kernel_size, num_lstm_layers)
+        self.convLSTM = StackedConvLSTM(in_channels, hidden_dim, kernel_size, num_lstm_layers)
 
-        self.decoder = nn.Conv2d(hidden_channels, in_channels, kernel_size=(1,1))
+        self.decoder = nn.Conv2d(hidden_dim, in_channels, kernel_size=(1,1))
         self.activation = nn.Sigmoid()
 
     def forward(self, frame_sequence: torch.Tensor) -> torch.Tensor:
@@ -155,7 +156,8 @@ class LSTMSceneToScene02(nn.Module):
         torch.Tensor
             Predicted next frame with shape (batch_size, height, width)
         """
-
+        if len(frame_sequence.shape) == 4:
+            frame_sequence = frame_sequence.unsqueeze(2)
         out, _ = self.convLSTM(frame_sequence)
 
         last = out[:, -1]
@@ -193,15 +195,17 @@ class LSTMSceneToScene02(nn.Module):
             predictions.append(next_frame.unsqueeze(1))
 
             # update sequence: drop oldest frame, append prediction
+            
+            
+            
             current_sequence = torch.cat(
-                [
-                    current_sequence[:, 1:],
+                [   
+                    current_sequence[:, 1:].unsqueeze(2),
                     next_frame.unsqueeze(1),
                 ],
                 dim=1,
             )
-
-        return torch.cat(predictions, dim=1)
+        return torch.cat(predictions, dim=1).squeeze(2)
 
     def get_parameter_count(self) -> int:
         """

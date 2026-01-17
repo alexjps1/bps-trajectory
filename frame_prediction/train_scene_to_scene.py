@@ -24,6 +24,8 @@ from torch.utils.data import DataLoader
 import loops
 from datasets import DynamicScenes2dDataset
 from models.lstm_scene_to_scene01 import LSTMSceneToScene01
+from models.lstm_scene_to_scene02 import LSTMSceneToScene02
+
 
 # constants
 THIS_DIR = Path(__file__).resolve().parent
@@ -92,12 +94,20 @@ def objective(
     )
 
     # Model initialization
-    model = LSTMSceneToScene01(
-        frame_dims=frame_dims,
-        hidden_dim=hidden_dim,
-        num_lstm_layers=num_lstm_layers,
-        dropout_rate=dropout_rate,
-    )
+    model_config = search_space_config["model"]
+    if model_config["type"] == 'linear':
+        model = LSTMSceneToScene01(
+            frame_dims=frame_dims,
+            hidden_dim=model_config["hidden_dim"],
+            num_lstm_layers=model_config["num_lstm_layers"],
+            dropout_rate=model_config["dropout_rate"],
+        )
+    elif model_config["type"] == 'conv':
+        model = LSTMSceneToScene02(
+            frame_dims=frame_dims,
+            hidden_dim=model_config["hidden_dim"],
+            num_lstm_layers=model_config["num_lstm_layers"]
+        )
     model = model.to(device)
 
     # print info about the current run to the console
@@ -298,12 +308,20 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
     frame_dims = tuple(training_config["frame_dims"])
     training_run_name = run_config.get("training_run_name", "default")
 
-    model = LSTMSceneToScene01(
-        frame_dims=frame_dims,
-        hidden_dim=model_config["hidden_dim"],
-        num_lstm_layers=model_config["num_lstm_layers"],
-        dropout_rate=model_config["dropout_rate"],
-    )
+    if model_config["type"] == 'linear':
+        model = LSTMSceneToScene01(
+            frame_dims=frame_dims,
+            hidden_dim=model_config["hidden_dim"],
+            num_lstm_layers=model_config["num_lstm_layers"],
+            dropout_rate=model_config["dropout_rate"],
+        )
+        
+    elif model_config["type"] == 'conv':
+        model = LSTMSceneToScene02(
+            frame_dims=frame_dims,
+            hidden_dim=model_config["hidden_dim"],
+            num_lstm_layers=model_config["num_lstm_layers"]
+        )
     model = model.to(device)
 
     print_run_config("Single-run hyperparameters", run_config)
