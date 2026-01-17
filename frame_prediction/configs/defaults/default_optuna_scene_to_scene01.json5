@@ -20,47 +20,49 @@
     },
     "run": {  // mirrors the structure of the singlerun config file
         "model": {
-                // tunable
-                "hidden_dim": {
-                    "type": "categorical",
-                    "vals": [128, 256, 512, 1024] // categorical means optuna will pick one of these vals
-                },
-                "num_lstm_layers": {  // increasing beyond 2 not recommneded
-                    "type": "constant",  // no tuning
-                    "vals": 2
-                },
-                "dropout_rate": {
-                    "type": "float",
-                    "vals": [0.0, 0.5]  // float means optuna can pick anything in this range
-                }
+            "type": "linear",
+
+            // tunable
+            "hidden_dim": {
+                "type": "categorical",
+                "vals": [128, 256, 512, 1024] // categorical means optuna will pick one of these vals
+            },
+            "num_lstm_layers": {  // increasing beyond 2 not recommneded
+                "type": "constant",  // no tuning
+                "vals": 2
+            },
+            "dropout_rate": {
+                "type": "float",
+                "vals": [0.0, 0.5]  // float means optuna can pick anything in this range
+            }
         },
         "training": {
-                // not tunable
-                "num_epochs": 40,    // num epochs after which to stop
-                "epochs_between_evals": 5,    // e.g. evaluate performance every 5 epochs
-                "frame_dims": [64, 64],
-                "checkpoint_dir": "checkpoints",    // where to save model state dicts; relative to "./frame_prediction/runs/training_run_name/"
+            // not tunable
+            "num_epochs": 40,    // num epochs after which to stop
+            "epochs_between_evals": 5,    // e.g. evaluate performance every 5 epochs
+            "frame_dims": [64, 64],
+            "checkpoint_dir": "checkpoints",    // where to save model state dicts; relative to "./frame_prediction/runs/training_run_name/"
 
-                // tunable
-                "batch_size": {
-                    "type": "categorical",
-                    "vals": [16, 32, 64],
-                },
-                "learning_rate": {
-                    "type": "float",
-                    "vals": [0.0001, 0.01], // optimizer is Adam
-                    "log": true
-                }
+            // tunable
+            "batch_size": {
+                "type": "categorical",
+                "vals": [16, 32, 64],
+            },
+            "learning_rate": {
+                "type": "float",
+                "vals": [0.0001, 0.01], // optimizer is Adam
+                "log": true
+            }
         },
         "data": {
-                // not tunable
-                "data_directory": "dynamic_scenes2d",  // relative to "./frame_prediction"
-                "file_pattern": "*.npy",
-                "num_input_frames": 20,    // num frames given as input
-                "num_target_frames": 1,    // num frames to predict (autoregresively if >1)
-                "train_split": 0.7,
-                "val_split": 0.1,
-                "random_seed": 42    // used for dataset split
+            // not tunable
+            "data_directory": "dynamic_scenes2d",  // relative to "./frame_prediction"
+            "file_pattern": "*.npy",
+            "num_input_frames": 20,    // num frames given as input
+            "num_target_frames": 1,    // num frames to predict (autoregresively if >1)
+            "train_split": 0.7,
+            "val_split": 0.1,
+            "random_seed": 42    // used for dataset split
         }
     }
 }

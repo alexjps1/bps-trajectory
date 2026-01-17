@@ -1,6 +1,7 @@
 {
     "training_run_name": "default",
     "model": {
+        "type": "linear",
         "hidden_dim": 512,  // sets size of hidden state and cell state in LSTM
         "num_lstm_layers": 2,  // increasing beyond 2 not recommneded
         "dropout_rate": 0.2
