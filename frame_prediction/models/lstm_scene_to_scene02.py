@@ -17,6 +17,7 @@ import torch.nn as nn
 # constants
 PRECISION = np.float32
 
+
 class ConvLSTMCell(nn.Module):
     def __init__(self, input_channels, hidden_dim, kernel_size):
         super().__init__()
@@ -36,16 +37,17 @@ class ConvLSTMCell(nn.Module):
 
         i, f, o, g = torch.split(conv_out, self.hidden_dim, dim=1)
 
-        i = torch.sigmoid(i) # input gate
-        f = torch.sigmoid(f) # forget gate
-        o = torch.sigmoid(o) # output gate
-        g = torch.tanh(g) 
+        i = torch.sigmoid(i)  # input gate
+        f = torch.sigmoid(f)  # forget gate
+        o = torch.sigmoid(o)  # output gate
+        g = torch.tanh(g)
 
         c_next = f * c + i * g
         h_next = o * torch.tanh(c_next)
 
         return h_next, c_next
-    
+
+
 class ConvLSTM(nn.Module):
     def __init__(self, input_channels, hidden_dim, kernel_size):
         super().__init__()
@@ -68,6 +70,7 @@ class ConvLSTM(nn.Module):
 
         return torch.cat(outputs, dim=1), (h, c)
 
+
 class StackedConvLSTM(nn.Module):
     def __init__(self, input_channels: int, hidden_dim: int, kernel_size: int, num_layers: int):
         super().__init__()
@@ -88,6 +91,7 @@ class StackedConvLSTM(nn.Module):
             final_states.append((h, c))  # store final hidden + cell states for each layer
 
         return output, final_states
+
 
 class LSTMSceneToScene02(nn.Module):
     """
@@ -136,10 +140,9 @@ class LSTMSceneToScene02(nn.Module):
         self.num_lstm_layers = num_lstm_layers
         self.kernel_size = kernel_size
 
-
         self.convLSTM = StackedConvLSTM(in_channels, hidden_dim, kernel_size, num_lstm_layers)
 
-        self.decoder = nn.Conv2d(hidden_dim, in_channels, kernel_size=(1,1))
+        self.decoder = nn.Conv2d(hidden_dim, in_channels, kernel_size=(1, 1))
         self.activation = nn.Sigmoid()
 
     def forward(self, frame_sequence: torch.Tensor) -> torch.Tensor:
@@ -165,7 +168,6 @@ class LSTMSceneToScene02(nn.Module):
 
         return self.activation(prediction)
 
-
     def forward_multi_step(
         self,
         frame_sequence: torch.Tensor,
@@ -187,24 +189,25 @@ class LSTMSceneToScene02(nn.Module):
             Predicted frames with shape (batch_size, num_steps, height, width)
         """
         predictions = []
-        current_sequence = frame_sequence.clone()
+
+        # Ensure current_sequence has a channel dimension
+        if len(frame_sequence.shape) == 4:
+            current_sequence = frame_sequence.unsqueeze(2).clone()
+        else:
+            current_sequence = frame_sequence.clone()
 
         for _ in range(num_steps):
             # predict next frame
+            # self.forward expects (B, T, C, H, W)
             next_frame = self.forward(current_sequence)
             predictions.append(next_frame.unsqueeze(1))
 
-            # update sequence: drop oldest frame, append prediction
-            
-            
-            
-            current_sequence = torch.cat(
-                [   
-                    current_sequence[:, 1:].unsqueeze(2),
-                    next_frame.unsqueeze(1),
-                ],
-                dim=1,
-            )
+            # update sequence efficiently: drop oldest frame, append prediction
+            # Shift sequence to the left
+            current_sequence[:, :-1] = current_sequence[:, 1:].clone()
+            # Add new frame at the end
+            current_sequence[:, -1] = next_frame
+
         return torch.cat(predictions, dim=1).squeeze(2)
 
     def get_parameter_count(self) -> int:
