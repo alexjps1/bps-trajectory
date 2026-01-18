@@ -19,6 +19,7 @@
         "timeout_seconds": 7200  // two hours
     },
     "run": {  // mirrors the structure of the singlerun config file
+        "training_run_name_prefix": null,  // automatically set to teh study name
         "model": {
             "type": "linear",
 

@@ -1,5 +1,5 @@
 {
-    "training_run_name": "default",
+    "training_run_name_prefix": "default", // prefix because hyperparameter names will be appended to this when saving checkpoints and images
     "model": {
         "type": "linear",
         "hidden_dim": 512,  // sets size of hidden state and cell state in LSTM

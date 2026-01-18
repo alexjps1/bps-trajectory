@@ -8,7 +8,9 @@ Moritz Schüler and Alexander João Peterson Santos
 
 # standard library imports
 import argparse
+import atexit
 import copy
+import sys
 from collections.abc import Sized
 from pathlib import Path
 from typing import cast
@@ -29,6 +31,51 @@ from models.lstm_scene_to_scene02 import LSTMSceneToScene02
 # constants
 THIS_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT_DIR = THIS_DIR.parent
+
+
+class Tee:
+    """A helper class to tee output to a file and a stream."""
+
+    def __init__(self, stream1, stream2):
+        self.stream1 = stream1
+        self.stream2 = stream2
+
+    def write(self, message):
+        self.stream1.write(message)
+        self.stream2.write(message)
+        self.flush()
+
+    def flush(self):
+        self.stream1.flush()
+        self.stream2.flush()
+
+
+def setup_logging(study_name: str) -> None:
+    """Redirects stdout and stderr to both the console and log files."""
+    log_dir = PROJECT_ROOT_DIR / "frame_prediction" / "runs" / study_name / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    out_log_path = log_dir / f"{study_name}.out"
+    err_log_path = log_dir / f"{study_name}.err"
+
+    # Open log files
+    out_file = open(out_log_path, "w")
+    err_file = open(err_log_path, "w")
+
+    # Ensure files are closed on exit
+    atexit.register(out_file.close)
+    atexit.register(err_file.close)
+
+    # Keep original streams
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+
+    # Tee stdout and stderr
+    sys.stdout = Tee(original_stdout, out_file)
+    sys.stderr = Tee(original_stderr, err_file)
+
+    print(f"Logging stdout to: {out_log_path}")
+    print(f"Logging stderr to: {err_log_path}")
 
 
 def objective(
@@ -71,13 +118,12 @@ def objective(
     # Extract fixed parameters from config
     data_config = search_space_config["data"]
     training_config = search_space_config["training"]
-    num_input_frames = data_config["num_input_frames"]
     num_target_frames = data_config["num_target_frames"]
     frame_dims = tuple(training_config["frame_dims"])
     num_epochs = training_config["num_epochs"]
-    training_run_name = search_space_config.get("training_run_name", "optuna")
+    training_run_name_prefix = search_space_config["training_run_name_prefix"]
     checkpoint_dir = (
-        PROJECT_ROOT_DIR / "frame_prediction" / "runs" / training_run_name / training_config["checkpoint_dir"]
+        PROJECT_ROOT_DIR / "frame_prediction" / "runs" / training_run_name_prefix / training_config["checkpoint_dir"]
     )
 
     # Recreate dataloaders with suggested batch size
@@ -115,7 +161,8 @@ def objective(
     trial_run_config["training"]["batch_size"] = batch_size
     trial_run_config["training"]["learning_rate"] = learning_rate
     trial_run_config["training"]["num_epochs"] = num_epochs
-    print_run_config(f"[Trial {trial.number}] hyperparameters", trial_run_config)
+    print_run_config(trial_run_config, trial.number)
+    training_run_name = create_training_run_name(training_run_name_prefix, trial_run_config, trial.number)
     print(f"[Trial {trial.number}] Model parameters: {model.get_parameter_count():,}")
 
     # Train with pruning (the loop handles logging and pruning when trial object passed into it)
@@ -123,16 +170,14 @@ def objective(
         model=model,
         train_dataloader=train_dataloader_trial,
         val_dataloader=val_dataloader_trial,
-        num_input_frames=num_input_frames,
         num_target_frames=num_target_frames,
         frame_dims=frame_dims,
         device=device,
-        model_name=f"lstm_s2s01_trial{trial.number}",
-        batch_size=batch_size,
         num_epochs=num_epochs,
         epochs_between_evals=1,
         learning_rate=learning_rate,
         checkpoint_dir=str(checkpoint_dir),
+        training_run_name_prefix=training_run_name_prefix,
         training_run_name=training_run_name,
         trial=trial,
     )
@@ -183,9 +228,30 @@ def suggest_from_space(trial: Trial, name: str, space: object) -> object:
     raise ValueError(f"Unsupported hyperparameter type '{space_type}' for '{name}'")
 
 
-def print_run_config(title: str, run_config: dict) -> None:
-    print(f"\n{title}")
+def print_run_config(run_config: dict, trial_num: int | None = None) -> None:
+    if trial_num is not None:
+        print(f"[Trial {trial_num}] hyperparameters")
+    else:
+        print("[Training run hyperparameters (no run number)]")
     print(json5.dumps(run_config, indent=2, sort_keys=True))
+
+
+def create_training_run_name(training_run_name_prefix: str, run_config: dict, trial_num: int | None = None) -> str:
+    """
+    Generate a name for the training run, which is used as a file prefix for checkpoints and images.
+    """
+    frame_dims = run_config["training"]["frame_dims"]
+    fd = f"{frame_dims[0]}x{frame_dims[1]}"
+    bs = run_config["training"]["batch_size"]
+    lr = run_config["training"]["learning_rate"]
+    hd = run_config["model"]["hidden_dim"]
+    nl = run_config["model"]["num_lstm_layers"]
+    dr = run_config["model"]["dropout_rate"]
+    i = run_config["data"]["num_input_frames"]
+    o = run_config["data"]["num_target_frames"]
+    if trial_num:
+        training_run_name_prefix = f"{training_run_name_prefix}_{trial_num}"
+    return f"{training_run_name_prefix}_i{i}_o{o}_fd{fd}_bs{bs}_lr{lr}_dr{dr}_hd{hd}_nl{nl}"
 
 
 def resolve_config_value(value: object) -> object:
@@ -303,7 +369,7 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
     num_input_frames = data_config["num_input_frames"]
     num_target_frames = data_config["num_target_frames"]
     frame_dims = tuple(training_config["frame_dims"])
-    training_run_name = run_config.get("training_run_name", "default")
+    training_run_name_prefix = run_config.get("training_run_name_prefix", "default")
 
     if model_config["type"] == "linear":
         model = LSTMSceneToScene01(
@@ -322,26 +388,30 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
         raise ValueError("Provided model type in config is not defined.")
     model = model.to(device)
 
-    print_run_config("Single-run hyperparameters", run_config)
+    print_run_config(run_config)
 
     checkpoint_dir = (
-        PROJECT_ROOT_DIR / "frame_prediction" / "runs" / training_run_name / training_config["checkpoint_dir"]
+        PROJECT_ROOT_DIR / "frame_prediction" / "runs" / training_run_name_prefix / training_config["checkpoint_dir"]
     )
+
+    # Create images directory for the run
+    images_dir = PROJECT_ROOT_DIR / "frame_prediction" / "runs" / training_run_name_prefix / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    training_run_name = create_training_run_name(training_run_name_prefix, run_config)
 
     loops.train_scene_to_scene(
         model=model,
         train_dataloader=train_dl,
         val_dataloader=val_dl,
-        num_input_frames=num_input_frames,
         num_target_frames=num_target_frames,
         frame_dims=frame_dims,
         device=device,
-        model_name=f"lstm_s2s01_{training_run_name}",
-        batch_size=training_config["batch_size"],
         num_epochs=training_config["num_epochs"],
         epochs_between_evals=training_config["epochs_between_evals"],
         learning_rate=training_config["learning_rate"],
         checkpoint_dir=str(checkpoint_dir),
+        training_run_name_prefix=training_run_name_prefix,
         training_run_name=training_run_name,
     )
 
@@ -351,6 +421,8 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
         dataloader=test_dl,
         num_target_frames=num_target_frames,
         device=device,
+        training_run_name_prefix=training_run_name_prefix,
+        training_run_name=training_run_name,
     )
     print(
         f"Test Results | BCE: {test_bce:.6f} | BCE bin: {test_bce_bin:.6f} | "
@@ -365,6 +437,11 @@ def run_optuna_study(
     device: torch.device,
 ) -> None:
     study_name = study_config["study"]["name"]
+
+    # Create images directory for the study
+    images_dir = PROJECT_ROOT_DIR / "frame_prediction" / "runs" / study_name / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
     storage = f"sqlite:///{PROJECT_ROOT_DIR}/frame_prediction/runs/optuna_storage/{study_config['study']['storage']}"
     n_trials = study_config["optimization"]["n_trials"]
     timeout = study_config["optimization"]["timeout_seconds"]
@@ -457,22 +534,21 @@ pruner: {pruner_type}
         train_dataset, val_dataset, test_dataset, best_params["batch_size"]
     )
 
+    final_training_run_name = create_training_run_name(f"{study_name}_final", run_config)
     # Full training with best hyperparameters
     loops.train_scene_to_scene(
         model=final_model,
         train_dataloader=train_dataloader_final,
         val_dataloader=val_dataloader_final,
-        num_input_frames=num_input_frames,
         num_target_frames=num_target_frames,
         frame_dims=frame_dims,
         device=device,
-        model_name="lstm_s2s01_tuned",
-        batch_size=best_params["batch_size"],
         num_epochs=cast(int, resolve_config_value(training_config["num_epochs"])),
         epochs_between_evals=cast(int, resolve_config_value(training_config["epochs_between_evals"])),
         learning_rate=best_params["learning_rate"],
         checkpoint_dir=training_config["checkpoint_dir"],
-        training_run_name=study_name,
+        training_run_name_prefix=study_name,
+        training_run_name=final_training_run_name,
     )
 
     # Final evaluation on test set
@@ -490,8 +566,18 @@ pruner: {pruner_type}
 
 
 def main(train_config_path: str | None, study_config_path: str | None) -> None:
-    # Load configuration
+    # Load configuration to get the study name for logging
     is_optuna_study, run_config, study_config = load_config(train_config_path, study_config_path)
+
+    # Determine study/run name for logging
+    if is_optuna_study:
+        study_name = study_config["study"]["name"]
+    else:
+        study_name = run_config.get("training_run_name", "default")
+
+    # Setup logging to file
+    setup_logging(study_name)
+
     if is_optuna_study:
         print("Running an Optuna study with multiple training runs.")
     else:
