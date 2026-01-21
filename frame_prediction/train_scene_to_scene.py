@@ -30,7 +30,6 @@ from models.lstm_scene_to_scene02 import LSTMSceneToScene02
 
 # constants
 THIS_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT_DIR = THIS_DIR.parent
 
 
 class Tee:
@@ -50,13 +49,25 @@ class Tee:
         self.stream2.flush()
 
 
-def setup_logging(study_name: str) -> None:
-    """Redirects stdout and stderr to both the console and log files."""
-    log_dir = PROJECT_ROOT_DIR / "frame_prediction" / "runs" / study_name / "logs"
+def setup_logging(log_dir: Path, log_name: str) -> None:
+    """
+    Redirect stdout and stderr to both the console and log files.
+
+    Parameters
+    ----------
+    log_dir: Path
+        Directory to store the log files
+    log_name: str
+        Base name for the .out and .err log files
+
+    Returns
+    -------
+    None
+    """
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    out_log_path = log_dir / f"{study_name}.out"
-    err_log_path = log_dir / f"{study_name}.err"
+    out_log_path = log_dir / f"{log_name}.out"
+    err_log_path = log_dir / f"{log_name}.err"
 
     # Open log files
     out_file = open(out_log_path, "w")
@@ -80,6 +91,7 @@ def setup_logging(study_name: str) -> None:
 
 def objective(
     trial: Trial,
+    study_name: str,
     search_space_config: dict,
     train_dataloader: DataLoader,
     val_dataloader: DataLoader,
@@ -92,7 +104,9 @@ def objective(
     ----------
     trial: Trial
         Optuna trial object for suggesting hyperparameters
-    serach_space_config: dict
+    study_name: str
+        Name of the Optuna study (used for run naming)
+    search_space_config: dict
         Base run configuration with hyperparameter types and acceptable value lists/ranges
         Has similar formatting to the single run config, contained in the "run" attribute of an optuna study config JSON.
     train_dataloader: DataLoader
@@ -105,7 +119,7 @@ def objective(
     Returns
     -------
     float
-        Validation BCE loss (lower is better)
+        Best validation BCE loss of this trial (lower is better)
     """
     # Suggest hyperparameters
     hyperparams = suggest_hyperparams(trial, search_space_config)
@@ -121,10 +135,6 @@ def objective(
     num_target_frames = data_config["num_target_frames"]
     frame_dims = tuple(training_config["frame_dims"])
     num_epochs = training_config["num_epochs"]
-    training_run_name_prefix = search_space_config["training_run_name_prefix"]
-    checkpoint_dir = (
-        PROJECT_ROOT_DIR / "frame_prediction" / "runs" / training_run_name_prefix / training_config["checkpoint_dir"]
-    )
 
     # Recreate dataloaders with suggested batch size
     train_dataloader_trial = DataLoader(
@@ -153,6 +163,10 @@ def objective(
         raise ValueError("Provided model type in config is not defined.")
     model = model.to(device)
 
+    run_name: str = f"{study_name}_t{trial.number:02d}"
+    run_path: Path = THIS_DIR / "runs" / study_name / run_name
+    run_path.mkdir(parents=True, exist_ok=True)
+
     # print info about the current run to the console
     trial_run_config = copy.deepcopy(search_space_config)
     trial_run_config["model"]["hidden_dim"] = hidden_dim
@@ -162,8 +176,11 @@ def objective(
     trial_run_config["training"]["learning_rate"] = learning_rate
     trial_run_config["training"]["num_epochs"] = num_epochs
     print_run_config(trial_run_config, trial.number)
-    training_run_name = create_training_run_name(training_run_name_prefix, trial_run_config, trial.number)
     print(f"[Trial {trial.number}] Model parameters: {model.get_parameter_count():,}")
+
+    # save that info to a json file in the run directory
+    with open(run_path / "config.json5", "w") as f:
+        json5.dump(trial_run_config, f)
 
     # Train with pruning (the loop handles logging and pruning when trial object passed into it)
     best_val_loss = loops.train_scene_to_scene(
@@ -171,14 +188,12 @@ def objective(
         train_dataloader=train_dataloader_trial,
         val_dataloader=val_dataloader_trial,
         num_target_frames=num_target_frames,
-        frame_dims=frame_dims,
         device=device,
         num_epochs=num_epochs,
         epochs_between_evals=1,
         learning_rate=learning_rate,
-        checkpoint_dir=str(checkpoint_dir),
-        training_run_name_prefix=training_run_name_prefix,
-        training_run_name=training_run_name,
+        run_name=run_name,
+        run_path=run_path,
         trial=trial,
     )
 
@@ -186,6 +201,21 @@ def objective(
 
 
 def suggest_hyperparams(trial: Trial, run_config: dict) -> dict:
+    """
+    Suggest hyperparameters for all tunable entries in the run configuration.
+
+    Parameters
+    ----------
+    trial: Trial
+        Optuna trial used to suggest values
+    run_config: dict
+        Run configuration containing model/training hyperparameter spaces
+
+    Returns
+    -------
+    dict
+        Mapping of hyperparameter names to suggested values
+    """
     model_space = run_config["model"]
     training_space = run_config["training"]
     hyperparams: dict[str, object] = {}
@@ -202,6 +232,23 @@ def suggest_hyperparams(trial: Trial, run_config: dict) -> dict:
 
 
 def suggest_from_space(trial: Trial, name: str, space: object) -> object:
+    """
+    Resolve a single hyperparameter space entry.
+
+    Parameters
+    ----------
+    trial: Trial
+        Optuna trial used to suggest values
+    name: str
+        Hyperparameter name
+    space: object
+        Either a constant value or a dict defining a search space
+
+    Returns
+    -------
+    object
+        Suggested or constant value for the hyperparameter
+    """
     if not isinstance(space, dict) or "type" not in space:
         return space
 
@@ -236,25 +283,20 @@ def print_run_config(run_config: dict, trial_num: int | None = None) -> None:
     print(json5.dumps(run_config, indent=2, sort_keys=True))
 
 
-def create_training_run_name(training_run_name_prefix: str, run_config: dict, trial_num: int | None = None) -> str:
-    """
-    Generate a name for the training run, which is used as a file prefix for checkpoints and images.
-    """
-    frame_dims = run_config["training"]["frame_dims"]
-    fd = f"{frame_dims[0]}x{frame_dims[1]}"
-    bs = run_config["training"]["batch_size"]
-    lr = run_config["training"]["learning_rate"]
-    hd = run_config["model"]["hidden_dim"]
-    nl = run_config["model"]["num_lstm_layers"]
-    dr = run_config["model"]["dropout_rate"]
-    i = run_config["data"]["num_input_frames"]
-    o = run_config["data"]["num_target_frames"]
-    if trial_num:
-        training_run_name_prefix = f"{training_run_name_prefix}_{trial_num}"
-    return f"{training_run_name_prefix}_i{i}_o{o}_fd{fd}_bs{bs}_lr{lr}_dr{dr}_hd{hd}_nl{nl}"
-
-
 def resolve_config_value(value: object) -> object:
+    """
+    Resolve a config entry that may be a search space into a concrete value.
+
+    Parameters
+    ----------
+    value: object
+        Either a constant value or a dict with a "vals" entry
+
+    Returns
+    -------
+    object
+        Concrete value to use from the config
+    """
     if not isinstance(value, dict) or "type" not in value:
         return value
 
@@ -266,11 +308,21 @@ def resolve_config_value(value: object) -> object:
 
 def get_dataset(run_config: dict) -> DynamicScenes2dDataset:
     """
-    Returns dataset based on the config
+    Create a dataset instance based on the run configuration.
+
+    Parameters
+    ----------
+    run_config: dict
+        Run configuration containing data settings
+
+    Returns
+    -------
+    DynamicScenes2dDataset
+        Dataset configured from the run settings
     """
     data_config = run_config["data"]
     dataset = DynamicScenes2dDataset(
-        data_directory=(PROJECT_ROOT_DIR / "frame_prediction" / data_config["data_directory"]),
+        data_directory=(THIS_DIR / data_config["data_directory"]),
         as_numpy=False,
         num_input_frames=data_config["num_input_frames"],
         num_target_frames=data_config["num_target_frames"],
@@ -331,13 +383,14 @@ def load_config(train_config_path: str | None, study_config_path: str | None) ->
         run_config: dict
         with open(train_config_path) as f:
             run_config = json5.load(f)
+        assert run_config.get("name") is not None
         return False, run_config, None
     elif study_config_path:
         # is optuna study
         with open(study_config_path) as f:
             study_config = json5.load(f)
             run_config = study_config["run"]
-            run_config["training_run_name"] = study_config["study"]["name"]
+        assert run_config.get("name") is None
         return True, run_config, study_config
     else:
         raise ValueError("Neither a single-run nor optuna study config found")
@@ -347,6 +400,19 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
     """
     Note: Does not use resolve_config_value to read values from run_config.
     It is assumed that a single run config file will not contain tuning info
+
+    Parameters
+    ----------
+    run_config: dict
+        Single-run configuration with fixed hyperparameters
+    dataset: DynamicScenes2dDataset
+        Full dataset to split into train/val/test
+    device: torch.device
+        Device used for training and evaluation
+
+    Returns
+    -------
+    None
     """
     # config shortcut vars
     training_config = run_config["training"]
@@ -366,10 +432,8 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
     train_dataset, val_dataset, test_dataset = get_split_datasets(run_config, dataset)
     train_dl, val_dl, test_dl = get_dataloaders(train_dataset, val_dataset, test_dataset, training_config["batch_size"])
 
-    num_input_frames = data_config["num_input_frames"]
     num_target_frames = data_config["num_target_frames"]
     frame_dims = tuple(training_config["frame_dims"])
-    training_run_name_prefix = run_config.get("training_run_name_prefix", "default")
 
     if model_config["type"] == "linear":
         model = LSTMSceneToScene01(
@@ -388,31 +452,27 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
         raise ValueError("Provided model type in config is not defined.")
     model = model.to(device)
 
+    # create dir for this run
+    run_name = run_config["name"]
+    run_path: Path = THIS_DIR / "runs" / run_name
+    run_path.mkdir(parents=True, exist_ok=True)
+
+    # print and save the run config
     print_run_config(run_config)
-
-    checkpoint_dir = (
-        PROJECT_ROOT_DIR / "frame_prediction" / "runs" / training_run_name_prefix / training_config["checkpoint_dir"]
-    )
-
-    # Create images directory for the run
-    images_dir = PROJECT_ROOT_DIR / "frame_prediction" / "runs" / training_run_name_prefix / "images"
-    images_dir.mkdir(parents=True, exist_ok=True)
-
-    training_run_name = create_training_run_name(training_run_name_prefix, run_config)
+    with open(run_path / "config.json5", "w") as f:
+        json5.dump(run_config, f)
 
     loops.train_scene_to_scene(
         model=model,
         train_dataloader=train_dl,
         val_dataloader=val_dl,
         num_target_frames=num_target_frames,
-        frame_dims=frame_dims,
         device=device,
         num_epochs=training_config["num_epochs"],
         epochs_between_evals=training_config["epochs_between_evals"],
         learning_rate=training_config["learning_rate"],
-        checkpoint_dir=str(checkpoint_dir),
-        training_run_name_prefix=training_run_name_prefix,
-        training_run_name=training_run_name,
+        run_name=run_name,
+        run_path=run_path,
     )
 
     print("\nEvaluating on test set...")
@@ -421,8 +481,8 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
         dataloader=test_dl,
         num_target_frames=num_target_frames,
         device=device,
-        training_run_name_prefix=training_run_name_prefix,
-        training_run_name=training_run_name,
+        run_name=run_name,
+        run_path=run_path,
     )
     print(
         f"Test Results | BCE: {test_bce:.6f} | BCE bin: {test_bce_bin:.6f} | "
@@ -438,11 +498,7 @@ def run_optuna_study(
 ) -> None:
     study_name = study_config["study"]["name"]
 
-    # Create images directory for the study
-    images_dir = PROJECT_ROOT_DIR / "frame_prediction" / "runs" / study_name / "images"
-    images_dir.mkdir(parents=True, exist_ok=True)
-
-    storage = f"sqlite:///{PROJECT_ROOT_DIR}/frame_prediction/runs/optuna_storage/{study_config['study']['storage']}"
+    storage = f"sqlite:///{THIS_DIR}/runs/optuna_storage/{study_config['study']['storage']}"
     n_trials = study_config["optimization"]["n_trials"]
     timeout = study_config["optimization"]["timeout_seconds"]
     pruner_type = study_config["pruner"]["type"]
@@ -494,7 +550,7 @@ pruner: {pruner_type}
 
     # Run optimization
     study.optimize(
-        lambda trial: objective(trial, run_config, train_dl, val_dl, device),
+        lambda trial: objective(trial, study_name, run_config, train_dl, val_dl, device),
         n_trials=n_trials,
         timeout=timeout,
         show_progress_bar=True,
@@ -518,7 +574,6 @@ pruner: {pruner_type}
 
     best_params = study.best_trial.params
     frame_dims = tuple(training_config["frame_dims"])
-    num_input_frames = data_config["num_input_frames"]
     num_target_frames = data_config["num_target_frames"]
 
     final_model = LSTMSceneToScene01(
@@ -534,21 +589,21 @@ pruner: {pruner_type}
         train_dataset, val_dataset, test_dataset, best_params["batch_size"]
     )
 
-    final_training_run_name = create_training_run_name(f"{study_name}_final", run_config)
+    final_run_name: str = f"{study_name}_finalrun"
+    final_run_path: Path = THIS_DIR / "runs" / study_name / final_run_name
+
     # Full training with best hyperparameters
     loops.train_scene_to_scene(
         model=final_model,
         train_dataloader=train_dataloader_final,
         val_dataloader=val_dataloader_final,
         num_target_frames=num_target_frames,
-        frame_dims=frame_dims,
         device=device,
         num_epochs=cast(int, resolve_config_value(training_config["num_epochs"])),
         epochs_between_evals=cast(int, resolve_config_value(training_config["epochs_between_evals"])),
         learning_rate=best_params["learning_rate"],
-        checkpoint_dir=training_config["checkpoint_dir"],
-        training_run_name_prefix=study_name,
-        training_run_name=final_training_run_name,
+        run_name=final_run_name,
+        run_path=final_run_path,
     )
 
     # Final evaluation on test set
@@ -558,6 +613,8 @@ pruner: {pruner_type}
         dataloader=test_dataloader_final,
         num_target_frames=num_target_frames,
         device=device,
+        run_name=final_run_name,
+        run_path=final_run_path,
     )
     print(
         f"Test Results | BCE: {test_bce:.6f} | BCE bin: {test_bce_bin:.6f} | "
@@ -567,20 +624,20 @@ pruner: {pruner_type}
 
 def main(train_config_path: str | None, study_config_path: str | None) -> None:
     # Load configuration to get the study name for logging
+    is_optuna_study: bool
+    run_config: dict | None
+    study_config: dict | None
     is_optuna_study, run_config, study_config = load_config(train_config_path, study_config_path)
 
-    # Determine study/run name for logging
-    if is_optuna_study:
-        study_name = study_config["study"]["name"]
-    else:
-        study_name = run_config.get("training_run_name", "default")
-
     # Setup logging to file
-    setup_logging(study_name)
-
+    log_dir_name: str
     if is_optuna_study:
+        log_dir_name = cast(dict, study_config)["study"]["name"]
+        setup_logging(log_dir=(THIS_DIR / "runs" / log_dir_name / "logs"), log_name=log_dir_name)
         print("Running an Optuna study with multiple training runs.")
     else:
+        log_dir_name = run_config["name"]
+        setup_logging(log_dir=(THIS_DIR / "runs" / log_dir_name / "logs"), log_name=log_dir_name)
         print("Running a single training run.")
 
     # Device selection
@@ -590,11 +647,10 @@ def main(train_config_path: str | None, study_config_path: str | None) -> None:
     # get dataset
     dataset = get_dataset(run_config)
 
-    if not is_optuna_study:
-        run_single_training(run_config, dataset, device)
+    if is_optuna_study:
+        run_optuna_study(run_config, cast(dict, study_config), dataset, device)
     else:
-        assert study_config is not None
-        run_optuna_study(run_config, study_config, dataset, device)
+        run_single_training(run_config, dataset, device)
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@
         "timeout_seconds": 7200  // two hours
     },
     "run": {  // mirrors the structure of the singlerun config file
-        "training_run_name_prefix": null,  // automatically set to teh study name
+        // note there is no run_name attribute here (unlike in the singlerun config)
         "model": {
             "type": "linear",
 
@@ -42,7 +42,6 @@
             "num_epochs": 40,    // num epochs after which to stop
             "epochs_between_evals": 5,    // e.g. evaluate performance every 5 epochs
             "frame_dims": [64, 64],
-            "checkpoint_dir": "checkpoints",    // where to save model state dicts; relative to "./frame_prediction/runs/training_run_name/"
 
             // tunable
             "batch_size": {
