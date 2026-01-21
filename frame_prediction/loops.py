@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import cast
 
 # third party imports
+import matplotlib.pyplot as plt
 import optuna
 import torch
 import torch.nn as nn
@@ -20,6 +21,7 @@ import torch.optim as optim
 # first party imports
 from prediction_vis import visualize_grid_difference
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard.writer import SummaryWriter
 from tqdm import tqdm
 
 # constants
@@ -57,6 +59,7 @@ def train_scene_to_scene(
     run_name: str,
     run_path: Path,
     trial=None,
+    writer: SummaryWriter | None = None,
 ) -> float:
     """
     Train a scene-to-scene frame prediction model.
@@ -182,6 +185,12 @@ def train_scene_to_scene(
         avg_train_mse_loss = epoch_mse_loss / len(train_dataloader)
         avg_train_mse_loss_bin = epoch_mse_loss_bin / len(train_dataloader)
 
+        if writer is not None:
+            writer.add_scalar("Train/BCE", avg_train_bce_loss, epoch)
+            writer.add_scalar("Train/BCE_bin", avg_train_bce_loss_bin, epoch)
+            writer.add_scalar("Train/MSE", avg_train_mse_loss, epoch)
+            writer.add_scalar("Train/MSE_bin", avg_train_mse_loss_bin, epoch)
+
         if epoch % epochs_between_evals == 0 or epoch == num_epochs - 1:
             avg_val_bce_loss, avg_val_bce_loss_bin, avg_val_mse_loss, avg_val_mse_loss_bin = evaluate_scene_to_scene(
                 model,
@@ -192,11 +201,18 @@ def train_scene_to_scene(
                 run_path=run_path,
                 max_visualizations=3,
                 epoch=epoch,
+                writer=writer,
             )
             print(
                 f"[Epoch {epoch:02d}/{(num_epochs - 1):02d}] | Train | BCE: {avg_train_bce_loss:.6f} | BCE bin: {avg_train_bce_loss_bin:.6f} | MSE: {avg_train_mse_loss:.6f} | MSE bin: {avg_train_mse_loss_bin:.6f}\n"
                 f"[Epoch {epoch:02d}/{(num_epochs - 1):02d}] | Val   | BCE: {avg_val_bce_loss:.6f} | BCE bin: {avg_val_bce_loss_bin:.6f} | MSE: {avg_val_mse_loss:.6f} | MSE bin: {avg_val_mse_loss_bin:.6f}\n"
             )
+
+            if writer is not None:
+                writer.add_scalar("Val/BCE", avg_val_bce_loss, epoch)
+                writer.add_scalar("Val/BCE_bin", avg_val_bce_loss_bin, epoch)
+                writer.add_scalar("Val/MSE", avg_val_mse_loss, epoch)
+                writer.add_scalar("Val/MSE_bin", avg_val_mse_loss_bin, epoch)
 
             # checkpoint on evaluation epochs if improved
             if avg_val_bce_loss < best_val_loss - improvement_threshold:
@@ -228,6 +244,7 @@ def evaluate_scene_to_scene(
     run_path: Path,
     max_visualizations: int = 0,
     epoch: int | None = None,
+    writer: SummaryWriter | None = None,
 ) -> tuple[float, float, float, float]:
     """
     Evaluate a scene-to-scene frame prediction model.
@@ -304,6 +321,21 @@ def evaluate_scene_to_scene(
                         show_window=False,
                         output_path=image_path,
                     )
+
+                    if writer is not None and epoch is not None:
+                        # Read the saved image and log to tensorboard
+                        try:
+                            # imread returns (H, W, 4) for PNG (RGBA)
+                            img_array = plt.imread(str(image_path))
+                            writer.add_image(
+                                f"Prediction/Image_{saved_visualizations:02d}",
+                                img_array,
+                                global_step=epoch,
+                                dataformats="HWC",
+                            )
+                        except Exception as e:
+                            print(f"Failed to log image to TensorBoard: {e}")
+
                     saved_visualizations += 1
 
             batch_bce_loss: torch.Tensor = bce_criterion(predicted_frames, target_frames, reduction="mean")

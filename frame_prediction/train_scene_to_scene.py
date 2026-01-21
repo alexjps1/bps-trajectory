@@ -21,6 +21,7 @@ import optuna
 import torch
 from optuna.trial import Trial
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard.writer import SummaryWriter
 
 # first party imports
 import loops
@@ -182,20 +183,27 @@ def objective(
     with open(run_path / "config.json5", "w") as f:
         json5.dump(trial_run_config, f)
 
+    # Initialize TensorBoard writer
+    writer = SummaryWriter(log_dir=run_path / "tensorboard")
+
     # Train with pruning (the loop handles logging and pruning when trial object passed into it)
-    best_val_loss = loops.train_scene_to_scene(
-        model=model,
-        train_dataloader=train_dataloader_trial,
-        val_dataloader=val_dataloader_trial,
-        num_target_frames=num_target_frames,
-        device=device,
-        num_epochs=num_epochs,
-        epochs_between_evals=1,
-        learning_rate=learning_rate,
-        run_name=run_name,
-        run_path=run_path,
-        trial=trial,
-    )
+    try:
+        best_val_loss = loops.train_scene_to_scene(
+            model=model,
+            train_dataloader=train_dataloader_trial,
+            val_dataloader=val_dataloader_trial,
+            num_target_frames=num_target_frames,
+            device=device,
+            num_epochs=num_epochs,
+            epochs_between_evals=1,
+            learning_rate=learning_rate,
+            run_name=run_name,
+            run_path=run_path,
+            trial=trial,
+            writer=writer,
+        )
+    finally:
+        writer.close()
 
     return best_val_loss
 
@@ -462,18 +470,25 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
     with open(run_path / "config.json5", "w") as f:
         json5.dump(run_config, f)
 
-    loops.train_scene_to_scene(
-        model=model,
-        train_dataloader=train_dl,
-        val_dataloader=val_dl,
-        num_target_frames=num_target_frames,
-        device=device,
-        num_epochs=training_config["num_epochs"],
-        epochs_between_evals=training_config["epochs_between_evals"],
-        learning_rate=training_config["learning_rate"],
-        run_name=run_name,
-        run_path=run_path,
-    )
+    # Initialize TensorBoard writer
+    writer = SummaryWriter(log_dir=run_path / "tensorboard")
+
+    try:
+        loops.train_scene_to_scene(
+            model=model,
+            train_dataloader=train_dl,
+            val_dataloader=val_dl,
+            num_target_frames=num_target_frames,
+            device=device,
+            num_epochs=training_config["num_epochs"],
+            epochs_between_evals=training_config["epochs_between_evals"],
+            learning_rate=training_config["learning_rate"],
+            run_name=run_name,
+            run_path=run_path,
+            writer=writer,
+        )
+    finally:
+        writer.close()
 
     print("\nEvaluating on test set...")
     test_bce, test_bce_bin, test_mse, test_mse_bin = loops.evaluate_scene_to_scene(
