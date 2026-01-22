@@ -5,14 +5,13 @@ Moritz Schüler and Alexander João Peterson Santos
 2026-01-06
 """
 
-# constant
-GPU_VRAM_LOGGING = True
-
 # standard library imports
 import os
-from typing import Any
+from pathlib import Path
+from typing import cast
 
 # third party imports
+import matplotlib.pyplot as plt
 import optuna
 import torch
 import torch.nn as nn
@@ -22,7 +21,12 @@ import torch.optim as optim
 # first party imports
 from prediction_vis import visualize_grid_difference
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard.writer import SummaryWriter
 from tqdm import tqdm
+
+# constants
+GPU_VRAM_LOGGING = True
+THIS_DIR = Path(__file__).resolve().parent
 
 
 def save_checkpoint(
@@ -30,7 +34,7 @@ def save_checkpoint(
     epoch: int,
     optimizer: torch.optim.Optimizer,
     loss: float,
-    filepath: str,
+    filepath: Path,
 ) -> None:
     torch.save(
         {
@@ -52,10 +56,10 @@ def train_scene_to_scene(
     num_epochs: int,
     epochs_between_evals: int,
     learning_rate: float,
-    checkpoint_dir: str,
-    training_run_name_prefix: str,
-    training_run_name: str,
-    trial: Any | None = None,
+    run_name: str,
+    run_path: Path,
+    trial=None,
+    writer: SummaryWriter | None = None,
 ) -> float:
     """
     Train a scene-to-scene frame prediction model.
@@ -70,42 +74,46 @@ def train_scene_to_scene(
         DataLoader for training data
     val_dataloader: DataLoader
         DataLoader for validation data
-    num_input_frames: int
-        Number of input frames used for prediction
     num_target_frames: int
         Number of target frames to predict
-    frame_dims: tuple[int, int]
-        Dimensions of each frame (height, width)
     device: torch.device
         Device to run training on (default: CPU)
-    model_name: str
-        Name prefix for checkpoint files
-    batch_size: int
-        Batch size (for checkpoint naming)
     num_epochs: int
         Number of training epochs
     epochs_between_evals: int
         Evaluate and checkpoint every N epochs (minimum 1)
     learning_rate: float
         Learning rate for optimizer
-    checkpoint_dir: str
-        Directory to save checkpoints
-    trial: Any | None
+    run_name: str
+        Run identifier used in checkpoint and image filenames
+    run_path: Path
+        Base directory for run artifacts (checkpoints/images)
+    trial: optuna.trial.Trial | None
         Optional Optuna trial for reporting and pruning
+
+    Returns
+    -------
+    float
+        Best validation BCE loss observed during training
     """
+
     model.train()
     optimizer: optim.Optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     bce_criterion = F.binary_cross_entropy
     mse_criterion = F.mse_loss
 
+    # path for this run
+    os.makedirs(run_path, exist_ok=True)
+
     # checkpoint setup
     best_val_loss: float = float("inf")
-    checkpoint_path: str = os.path.abspath(checkpoint_dir)
-    os.makedirs(checkpoint_path, exist_ok=True)
     improvement_threshold: float = 0.01
+    checkpoint_path: Path = run_path / "checkpoints"
+    os.makedirs(checkpoint_path, exist_ok=True)
 
     epochs_between_evals = max(1, epochs_between_evals)
 
+    # training loop
     for epoch in range(num_epochs):
         model.train()
         loop: tqdm = tqdm(train_dataloader, desc=f"[Epoch {epoch:02d}/{(num_epochs - 1):02d}]", ncols=80)
@@ -177,21 +185,34 @@ def train_scene_to_scene(
         avg_train_mse_loss = epoch_mse_loss / len(train_dataloader)
         avg_train_mse_loss_bin = epoch_mse_loss_bin / len(train_dataloader)
 
+        if writer is not None:
+            writer.add_scalar("Train/BCE", avg_train_bce_loss, epoch)
+            writer.add_scalar("Train/BCE_bin", avg_train_bce_loss_bin, epoch)
+            writer.add_scalar("Train/MSE", avg_train_mse_loss, epoch)
+            writer.add_scalar("Train/MSE_bin", avg_train_mse_loss_bin, epoch)
+
         if epoch % epochs_between_evals == 0 or epoch == num_epochs - 1:
             avg_val_bce_loss, avg_val_bce_loss_bin, avg_val_mse_loss, avg_val_mse_loss_bin = evaluate_scene_to_scene(
                 model,
                 val_dataloader,
                 num_target_frames,
                 device,
-                training_run_name_prefix=training_run_name_prefix,
-                training_run_name=training_run_name,
+                run_name=run_name,
+                run_path=run_path,
                 max_visualizations=3,
                 epoch=epoch,
+                writer=writer,
             )
             print(
                 f"[Epoch {epoch:02d}/{(num_epochs - 1):02d}] | Train | BCE: {avg_train_bce_loss:.6f} | BCE bin: {avg_train_bce_loss_bin:.6f} | MSE: {avg_train_mse_loss:.6f} | MSE bin: {avg_train_mse_loss_bin:.6f}\n"
                 f"[Epoch {epoch:02d}/{(num_epochs - 1):02d}] | Val   | BCE: {avg_val_bce_loss:.6f} | BCE bin: {avg_val_bce_loss_bin:.6f} | MSE: {avg_val_mse_loss:.6f} | MSE bin: {avg_val_mse_loss_bin:.6f}\n"
             )
+
+            if writer is not None:
+                writer.add_scalar("Val/BCE", avg_val_bce_loss, epoch)
+                writer.add_scalar("Val/BCE_bin", avg_val_bce_loss_bin, epoch)
+                writer.add_scalar("Val/MSE", avg_val_mse_loss, epoch)
+                writer.add_scalar("Val/MSE_bin", avg_val_mse_loss_bin, epoch)
 
             # checkpoint on evaluation epochs if improved
             if avg_val_bce_loss < best_val_loss - improvement_threshold:
@@ -199,8 +220,8 @@ def train_scene_to_scene(
                     f"              Validation BCE Loss improved from {best_val_loss:.6f} to {avg_val_bce_loss:.6f}. Saving..."
                 )
                 best_val_loss = avg_val_bce_loss
-                save_filename: str = f"{training_run_name_prefix}_e{epoch}.pt"
-                save_filepath: str = os.path.join(checkpoint_path, save_filename)
+                save_filename: str = f"{run_name}_e{epoch:02d}.pt"
+                save_filepath: Path = checkpoint_path / save_filename
                 save_checkpoint(model, epoch, optimizer, best_val_loss, save_filepath)
             if trial is not None:
                 trial.report(avg_val_bce_loss, epoch)
@@ -219,10 +240,11 @@ def evaluate_scene_to_scene(
     dataloader: DataLoader,
     num_target_frames: int,
     device: torch.device,
-    training_run_name_prefix: str,
-    training_run_name: str,
+    run_name: str,
+    run_path: Path,
     max_visualizations: int = 0,
     epoch: int | None = None,
+    writer: SummaryWriter | None = None,
 ) -> tuple[float, float, float, float]:
     """
     Evaluate a scene-to-scene frame prediction model.
@@ -237,6 +259,14 @@ def evaluate_scene_to_scene(
         Number of target frames to predict
     device: torch.device
         Device to run evaluation on (default: CPU)
+    run_name: str
+        Run identifier used in image filenames
+    run_path: Path
+        Base directory for run artifacts (images)
+    max_visualizations: int
+        Max number of images to save per evaluation epoch
+    epoch: int | None
+        Epoch index used for labeling images and visualization cadence
 
     Returns
     -------
@@ -253,12 +283,14 @@ def evaluate_scene_to_scene(
     bce_criterion = F.binary_cross_entropy
     mse_criterion = F.mse_loss
 
-    images_dir = os.path.join(os.path.dirname(__file__), "runs", training_run_name_prefix, "images")
-    should_visualize = max_visualizations > 0 and epoch is not None and epoch % 5 == 0
-    if should_visualize:
-        os.makedirs(images_dir, exist_ok=True)
-
+    # prepare visualizations
     saved_visualizations = 0
+    should_visualize = max_visualizations > 0 and epoch is not None and epoch % 5 == 0
+    images_path: Path | None = None
+    if should_visualize:
+        # create images for this run if it does not exist
+        images_path = run_path / "images"
+        os.makedirs(images_path, exist_ok=True)
 
     predicted_frames: torch.Tensor
     with torch.no_grad():
@@ -277,18 +309,33 @@ def evaluate_scene_to_scene(
                 for batch_idx in range(batch_size):
                     if saved_visualizations >= max_visualizations:
                         break
-                    os.makedirs(images_dir, exist_ok=True)
                     if epoch is not None:
-                        image_filename = f"{training_run_name}_e{epoch:03d}_img{saved_visualizations:02d}.png"
+                        image_filename = f"{run_name}_e{epoch:03d}_img{saved_visualizations:02d}.png"
                     else:
-                        image_filename = f"{training_run_name}_img{saved_visualizations:02d}.png"
-                    image_path = os.path.join(images_dir, image_filename)
+                        image_filename = f"{run_name}_img{saved_visualizations:02d}.png"
+                    image_path = cast(Path, images_path) / image_filename
                     visualize_grid_difference(
                         predicted_frames[batch_idx, 0],
                         target_frames[batch_idx, 0],
+                        save_image=True,
                         show_window=False,
                         output_path=image_path,
                     )
+
+                    if writer is not None and epoch is not None:
+                        # Read the saved image and log to tensorboard
+                        try:
+                            # imread returns (H, W, 4) for PNG (RGBA)
+                            img_array = plt.imread(str(image_path))
+                            writer.add_image(
+                                f"Prediction/Image_{saved_visualizations:02d}",
+                                img_array,
+                                global_step=epoch,
+                                dataformats="HWC",
+                            )
+                        except Exception as e:
+                            print(f"Failed to log image to TensorBoard: {e}")
+
                     saved_visualizations += 1
 
             batch_bce_loss: torch.Tensor = bce_criterion(predicted_frames, target_frames, reduction="mean")

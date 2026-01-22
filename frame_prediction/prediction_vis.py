@@ -7,6 +7,7 @@ Moritz Schüler and Alexander João Peterson Santos
 Initially just a copy of the scene reconstruction visualization script
 """
 
+from pathlib import Path
 from typing import Any, Dict
 
 import matplotlib.pyplot as plt
@@ -20,9 +21,9 @@ ArrayLike = np.ndarray | torch.Tensor
 def visualize_grid_difference(
     grid_pred: ArrayLike,
     grid_target: ArrayLike,
-    show_window: bool = False,
-    save_image: bool = True,
-    output_path: str = "grid_comparison.png",
+    show_window: bool,
+    save_image: bool,
+    output_path: Path,
 ) -> Dict[str, Any]:
     """
     Visualize grid occupancy prediction vs target with color coding and save as PNG.

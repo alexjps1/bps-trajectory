@@ -8,6 +8,7 @@ Moritz Schüler and Alexander João Peterson Santos
 # standard library imports
 import glob
 import os
+from pathlib import Path
 from typing import List, Tuple
 
 # third party imports
@@ -37,7 +38,7 @@ class DynamicScenes2dDataset(Dataset):
 
     def __init__(
         self,
-        data_directory: str,
+        data_directory: Path,
         num_input_frames: int,
         num_target_frames: int,
         as_numpy: bool = False,
