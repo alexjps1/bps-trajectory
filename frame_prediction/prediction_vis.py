@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 import numpy as np
 import torch
 
@@ -103,5 +104,106 @@ def visualize_grid_difference(
         "accuracy": accuracy,
         "correct_pixels": int(correct_pixels),
         "total_pixels": int(total_pixels),
+        "output_path": output_path,
+    }
+
+
+def visualize_time_series_grid_difference(
+    predictions: np.ndarray,
+    targets: np.ndarray,
+    output_path: str,
+    num_steps: int = 5,
+    n_rows: int = 3,
+    n_cols: int = 3,
+    threshold: float = 0.5,
+    show_window: bool = False,
+    save_image: bool = True
+    
+
+):
+    """
+    Visualize grid occupancy predictions vs targets with color coding and save as PNG.
+
+    Args
+    ----
+    predictions: torch.Tensor or np.ndarray
+        Predicted occupancy grids (N, 64, 64)
+    targets: torch.Tensor or np.ndarray
+        Target occupancy grids (N, 64, 64)
+    output_path: str (optional)
+        path to which to save visualization image if save_image is true
+    num_steps: int
+        Number of future steps that are predicted
+    n_rows: int
+        Number of rows of the plot grid
+    n_cols: int
+        Number of columns of the plot grid
+    threshold: float
+        Thresholds when a predicted value gets rounded to 1
+    show_window: bool (optional)
+        Whether to show the visualization in a window (suspends program until closed, default false)
+    save_image: bool (optional)
+        Whether to save image at the given output_path (default true)
+    
+
+    Returns
+    -------
+    dict:
+        Dictionary containing accuracy metrics
+    """
+    fig, axs = plt.subplots(n_rows, n_cols, figsize=(10,10))
+    index = 0
+    for i in range(n_rows):
+        for j in range(n_cols):
+            
+            original = (targets[num_steps + index] > threshold).astype(int)
+            reconstruction = (predictions[index] > threshold).astype(int)
+
+            match = np.array([(original == 1) & (reconstruction == 1)], dtype=int)
+
+            
+
+            img = original + 2* reconstruction + match
+            img = img.squeeze(0)
+
+            rgb = np.ones((img.shape[0], img.shape[1], 3))
+
+            rgb[img == 0] = [1, 1, 1]
+            rgb[img == 1] = [0.25, 0.35, 0.85]
+            rgb[img == 2] = [0.85, 0.25, 0.25]
+            rgb[img == 4] = [0.25, 0.75, 0.35]
+            axs[i][j].tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+            axs[i][j].imshow(rgb)
+            axs[i][j].set_title(f"t + {index + 1}")
+
+            tp = np.sum(match)
+            precision = tp / np.sum(reconstruction == 1)
+
+            fn = np.sum(np.array([(original == 1) & (reconstruction == 0)], dtype=int))
+            recall = tp/(tp+fn)
+            f1 = 2*(precision * recall)/(precision+recall)
+            axs[i][j].text(0.5, 0.08, f"F1: {f1:.3f}", ha='center', va='top', transform=axs[i][j].transAxes)
+
+            index += 1
+
+
+
+    legend_elements = [
+        Patch(facecolor='green', edgecolor='black', label='True Positive'),
+        Patch(facecolor='red', edgecolor='black', label='False Positive'),
+        Patch(facecolor='blue', edgecolor='black', label='False Negative')
+    ]
+    fig.legend(handles=legend_elements, loc='upper center', ncol=3, bbox_to_anchor=(0.5, 0.95))
+    fig.suptitle("Autoregressive Prediction with Timesteps t-4 to t as Input")
+    if show_window:
+        plt.show()
+    if save_image:
+        plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()  # Close the figure to free memory
+
+    return {
+        "F1": f1,
+        "correct_pixels": int(tp),
+        "total_pixels": int(original.shape[0]**2),
         "output_path": output_path,
     }
