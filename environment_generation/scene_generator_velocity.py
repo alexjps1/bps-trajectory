@@ -14,7 +14,7 @@ Note that cells with multiple (overlapping) objects will have the velocity of th
 There is no blending of velocities or special magic value to indicate multiple objects in one cell.
 """
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,7 +22,9 @@ from matplotlib.path import Path
 from numpy.typing import NDArray
 
 
-def compute_velocity_vectors(trajectory: NDArray[np.float32], use_unitvecs: bool) -> NDArray[np.float32]:
+def compute_velocity_vectors(
+    trajectory: NDArray[np.float32], use_unitvecs: bool
+) -> NDArray[np.float32]:
     """
     Compute velocity vectors for a trajectory.
 
@@ -44,7 +46,9 @@ def compute_velocity_vectors(trajectory: NDArray[np.float32], use_unitvecs: bool
         Velocity vectors with shape (frames, 2), where each row is [delta_y, delta_x].
         The first row is always [0, 0].
     """
-    assert trajectory.ndim == 2 and trajectory.shape[1] == 2, "Trajectory must have shape (frames, 2)"
+    assert (
+        trajectory.ndim == 2 and trajectory.shape[1] == 2
+    ), "Trajectory must have shape (frames, 2)"
     num_frames = trajectory.shape[0]
     velocities = np.zeros((num_frames, 2), dtype=np.float32)
 
@@ -53,7 +57,9 @@ def compute_velocity_vectors(trajectory: NDArray[np.float32], use_unitvecs: bool
         return velocities
 
     # Compute deltas: current position - previous position
-    velocities[1:] = trajectory[1:].astype(np.float32) - trajectory[:-1].astype(np.float32)
+    velocities[1:] = trajectory[1:].astype(np.float32) - trajectory[:-1].astype(
+        np.float32
+    )
 
     if not use_unitvecs:
         return velocities
@@ -82,7 +88,9 @@ def plot_environment(env: NDArray[np.float32]) -> None:
     plt.show()
 
 
-def get_circle(radius: int, center: tuple[int, int], env_size: tuple[int, int]) -> NDArray[np.float32]:
+def get_circle(
+    radius: int, center: tuple[int, int], env_size: tuple[int, int]
+) -> NDArray[np.float32]:
     """
     Generate a binary mask of a filled circle.
 
@@ -109,7 +117,11 @@ def get_circle(radius: int, center: tuple[int, int], env_size: tuple[int, int]) 
 
 
 def get_star(
-    center: tuple[int, int], env_size: tuple[int, int], num_points: int, outer_radius: int, inner_radius: int
+    center: tuple[int, int],
+    env_size: tuple[int, int],
+    num_points: int,
+    outer_radius: int,
+    inner_radius: int,
 ) -> NDArray[np.float32]:
     """
     Generate a binary mask of a filled star shape.
@@ -204,16 +216,24 @@ def get_circular_trajectory(
         point = np.array([x, y])
         trajectory.append(point)
 
-    trajectory_arr: NDArray[np.float32] = np.stack(trajectory, axis=0).astype(np.float32)
+    trajectory_arr: NDArray[np.float32] = np.stack(trajectory, axis=0).astype(
+        np.float32
+    )
     velocity_arr: NDArray[np.float32] | None = (
-        compute_velocity_vectors(trajectory_arr, velocity_unitvec) if compute_velocity else None
+        compute_velocity_vectors(trajectory_arr, velocity_unitvec)
+        if compute_velocity
+        else None
     )
 
     return (trajectory_arr, velocity_arr)
 
 
 def get_linear_trajectory(
-    start: tuple[int, int], end: tuple[int, int], speed: float, compute_velocity: bool, velocity_unitvec: bool = False
+    start: tuple[int, int],
+    end: tuple[int, int],
+    speed: float,
+    compute_velocity: bool,
+    velocity_unitvec: bool = False,
 ) -> Tuple[NDArray[np.float32], NDArray[np.float32] | None]:
     """
     Get a linear trajectory for an object and optionally the corresponding velocity vectors.
@@ -253,15 +273,21 @@ def get_linear_trajectory(
 
     trajectory.append(endarr)
 
-    trajectory_arr: NDArray[np.float32] = np.stack(trajectory, axis=0).astype(np.float32)
+    trajectory_arr: NDArray[np.float32] = np.stack(trajectory, axis=0).astype(
+        np.float32
+    )
     velocity_arr: NDArray[np.float32] | None = (
-        compute_velocity_vectors(trajectory_arr, velocity_unitvec) if compute_velocity else None
+        compute_velocity_vectors(trajectory_arr, velocity_unitvec)
+        if compute_velocity
+        else None
     )
 
     return (trajectory_arr, velocity_arr)
 
 
-def get_virtual_point(env_size: tuple[int, int], radius: int, virtual_points: NDArray[np.float32]) -> tuple[int, int]:
+def get_virtual_point(
+    env_size: tuple[int, int], radius: int, virtual_points: NDArray[np.float32]
+) -> tuple[int, int]:
     """
     Get a random point outside the grid at a distance ensuring the object fully exits.
 
@@ -305,6 +331,8 @@ def random_object_dynamic_env(
     n_frames: int,
     encode_velocity: bool,
     velocity_unitvec: bool = False,
+    motion_v: int = 1,
+    speed_range: Tuple[float, float] = (0.5, 2.0),
 ) -> NDArray[np.float32]:
     """
     Generate a random dynamic grid environment with moving objects.
@@ -327,6 +355,12 @@ def random_object_dynamic_env(
     velocity_unitvec : bool, optional
         If True, normalize velocity vectors to unit vectors (removing speed information).
         Defaults to False.
+    motion_v: int
+        Type of motion to use.
+            0 = only circle shapes, stationary and linear paths
+            1 = circle and star shapes, stationary and linear and circular paths
+    speed_range: int, optional (default (0.5, 2.0))
+        A range of acceptable speeds at which non-stationary objects will move
 
     Returns
     -------
@@ -338,7 +372,9 @@ def random_object_dynamic_env(
         Channels 1-2 contain velocity (delta_y, delta_x) when encode_velocity=True.
     """
 
-    def initialize_objects(frames_arr: NDArray[np.float32], virtual_points: NDArray[np.float32]) -> Dict[int, Dict]:
+    def initialize_objects(
+        frames_arr: NDArray[np.float32], virtual_points: NDArray[np.float32]
+    ) -> Dict[int, Dict]:
         """
         Create an object_dict entry for new objects, containing randomly-chosen attributes, such as shape, trajectory, and speed.
         Does not paint the object.
@@ -346,53 +382,79 @@ def random_object_dynamic_env(
         # initialization of random objects
         initial_object_dict: Dict[int, Dict] = {}
 
+        cur_object_shape: Literal["circle", "star"]
         for id in range(n_objects):
-            center_y, center_x = np.random.choice(np.arange(env_size[0])), np.random.choice(np.arange(env_size[0]))
+            # raondomly pick starting point of object
+            center_y, center_x = np.random.choice(
+                np.arange(env_size[0])
+            ), np.random.choice(np.arange(env_size[0]))
             # object is a circle with probability of 50%
-            if np.random.random() > 0.5:
+
+            if motion_v == 0:
+                # for motion v0, object is always a circle
+                cur_object_shape = "circle"
+            elif motion_v == 1:
+                # for motion v1, randomly pick circle or star
+                cur_object_shape = "circle" if np.random.rand() < 0.5 else "star"
+            else:
+                raise ValueError(f"Unknown motion type {motion_v}")
+
+            # create object metadata dict
+            if cur_object_shape == "circle":
                 radius = np.random.choice(np.arange(10))
                 obj_mask = get_circle(radius, (center_y, center_x), env_size)
                 object_meta_data = radius
-            # object is a star with probability of 50%
-            else:
+            elif cur_object_shape == "star":
                 num_points = np.random.choice(np.arange(3, 7))
                 radius = np.random.choice(np.arange(5, 8))
                 inner_radius = np.random.choice(np.arange(1, 5))
-                obj_mask = get_star((center_y, center_x), env_size, num_points, radius, inner_radius)
+                obj_mask = get_star(
+                    (center_y, center_x), env_size, num_points, radius, inner_radius
+                )
                 object_meta_data = [num_points, radius, inner_radius]
 
-            # object is moving with a probability of 50%
-            if np.random.random() > 0.5 and n_frames > 1:
-                start = center_y, center_x
-                speed = np.random.choice(np.arange(0.25, 1, 0.25))
-                # object is moving on a linear trajectory with a probability of 70%
-                if np.random.random() > 0.3:
-                    end = get_virtual_point(env_size, radius, virtual_points)
-                    trajectory, velocities = get_linear_trajectory(start, end, speed, encode_velocity, velocity_unitvec)
-                    trajectory_type = "linear"
-                # object is moving on a circular trajectory with a probability of 30%
-                else:
-                    radius = np.random.choice(np.arange(env_size[0] / 2, env_size[0]))
-                    # the circular trajectory is clockwise with a probability of 50%
-                    if np.random.random() > 0.5:
-                        clock_wise = True
-                    else:
-                        clock_wise = False
-                    trajectory, velocities = get_circular_trajectory(
-                        start, radius, speed, clock_wise, encode_velocity, velocity_unitvec
-                    )
-                    trajectory_type = "circular"
-            else:
+            # decide the trajectory type for this object
+            obj_traj_type: Literal["stationary", "circular", "linear"]
+            if n_frames == 1 or np.random.rand() < 0.5:
+                # always 50% of stationary
+                obj_traj_type = "stationary"
+            elif motion_v == 0:
+                obj_traj_type = "linear"
+            elif motion_v == 1:
+                obj_traj_type = "linear" if np.random.rand() < 0.5 else "circular"
+
+            if obj_traj_type == "stationary":
                 # object is static
                 trajectory = None
-                trajectory_type = None
                 velocities = None
                 speed = None
+                start = None
+            else:
+                start = center_y, center_x
+                speed = np.random.uniform(speed_range[0], speed_range[1])
+                if obj_traj_type == "linear":
+                    end = get_virtual_point(env_size, radius, virtual_points)
+                    trajectory, velocities = get_linear_trajectory(
+                        start, end, speed, encode_velocity, velocity_unitvec
+                    )
+                elif obj_traj_type == "circular":
+                    radius = np.random.choice(np.arange(env_size[0] / 2, env_size[0]))
+                    clockwise = np.random.random() > 0.5
+                    trajectory, velocities = get_circular_trajectory(
+                        start,
+                        radius,
+                        speed,
+                        clockwise,
+                        encode_velocity,
+                        velocity_unitvec,
+                    )
 
             assert obj_mask.shape == env_size
             # add dimensions for velocity if needed (velocity is 0 for initialized objects)
             if encode_velocity:
-                obj_occupancy = np.zeros((env_size[0], env_size[1], 3), dtype=np.float32)
+                obj_occupancy = np.zeros(
+                    (env_size[0], env_size[1], 3), dtype=np.float32
+                )
                 obj_occupancy[:, :, 0] = obj_mask
             else:
                 obj_occupancy = obj_mask
@@ -402,7 +464,7 @@ def random_object_dynamic_env(
                 "obj_occupancy": obj_occupancy,
                 "object_meta_data": object_meta_data,
                 "trajectory": trajectory,
-                "trajectory_type": trajectory_type,
+                "trajectory_type": obj_traj_type,
                 "velocities": velocities,
                 "traj_idx": 0,
                 "speed": speed,
@@ -410,7 +472,11 @@ def random_object_dynamic_env(
 
             # DEBUG, this block can be removed
             if encode_velocity:
-                assert initial_object_dict[id]["obj_occupancy"].shape == (env_size[0], env_size[1], 3)
+                assert initial_object_dict[id]["obj_occupancy"].shape == (
+                    env_size[0],
+                    env_size[1],
+                    3,
+                )
             else:
                 assert initial_object_dict[id]["obj_occupancy"].shape == env_size
 
@@ -426,28 +492,45 @@ def random_object_dynamic_env(
             np.random.choice(np.arange(env_size[0])),
             np.random.choice(np.arange(env_size[0])),
         )
-        new_speed = np.random.choice(np.arange(0.25, 1, 0.25))
-        if np.random.random() > 0.5:
+        new_speed = np.random.uniform(speed_range[0], speed_range[1])
+
+        cur_object_shape: Literal["circle", "star"]
+        if motion_v == 0:
+            # for motion v0, object is always a circle
+            cur_object_shape = "circle"
+        elif motion_v == 1:
+            # for motion v1, randomly pick circle or star
+            cur_object_shape = "circle" if np.random.rand() < 0.5 else "star"
+        else:
+            raise ValueError(f"Unknown motion type {motion_v}")
+
+        if cur_object_shape == "circle":
             radius = np.random.choice(np.arange(10))
             obj_occupancy = get_circle(radius, (new_center_y, new_center_x), env_size)
             object_meta_data = radius
-        else:
+        elif cur_object_shape == "star":
             num_points = np.random.choice(np.arange(3, 7))
             radius = np.random.choice(np.arange(5, 8))
             inner_radius = np.random.choice(np.arange(1, 5))
-            obj_occupancy = get_star((new_center_y, new_center_x), env_size, num_points, radius, inner_radius)
+            obj_occupancy = get_star(
+                (new_center_y, new_center_x), env_size, num_points, radius, inner_radius
+            )
             object_meta_data = [num_points, radius, inner_radius]
 
         start = get_virtual_point(env_size, radius, virtual_points)
         end = get_virtual_point(env_size, radius, virtual_points)
-        trajectory, velocities = get_linear_trajectory(start, end, new_speed, encode_velocity, velocity_unitvec)
+        trajectory, velocities = get_linear_trajectory(
+            start, end, new_speed, encode_velocity, velocity_unitvec
+        )
         trajectory_type = "linear"
 
         # Save the occupancy of the first frame of this object in the dict
         next_point = trajectory[0]
         if isinstance(object_meta_data, list):
             num_points, radius, inner_radius = object_meta_data
-            obj_mask = get_star(tuple(next_point), env_size, num_points, radius, inner_radius)
+            obj_mask = get_star(
+                tuple(next_point), env_size, num_points, radius, inner_radius
+            )
         else:
             radius = object_meta_data
             obj_mask = get_circle(radius, tuple(next_point), env_size)
@@ -497,13 +580,17 @@ def random_object_dynamic_env(
                 next_point = trajectory[traj_idx]
                 new_occupancy: NDArray[np.float32]
                 if encode_velocity:
-                    new_occupancy = np.zeros((env_size[0], env_size[1], 3)).astype(np.float32)
+                    new_occupancy = np.zeros((env_size[0], env_size[1], 3)).astype(
+                        np.float32
+                    )
                 else:
                     new_occupancy = np.zeros(env_size).astype(np.float32)
 
                 if isinstance(object_meta_data, list):
                     num_points, radius, inner_radius = object_meta_data
-                    obj_mask = get_star(tuple(next_point), env_size, num_points, radius, inner_radius)
+                    obj_mask = get_star(
+                        tuple(next_point), env_size, num_points, radius, inner_radius
+                    )
                 else:
                     radius = object_meta_data
                     obj_mask = get_circle(radius, tuple(next_point), env_size)
@@ -517,7 +604,11 @@ def random_object_dynamic_env(
                     new_occupancy[:, :] += obj_mask
 
                 # increment index for next frame, but wrapping circular trajectories which must never be exhausted
-                updated_idx = (traj_idx + 1) % len(trajectory) if trajectory_type == "circular" else traj_idx + 1
+                updated_idx = (
+                    (traj_idx + 1) % len(trajectory)
+                    if trajectory_type == "circular"
+                    else traj_idx + 1
+                )
 
                 # update entry for this object
                 object_dict[id]["obj_occupancy"] = new_occupancy
@@ -525,7 +616,9 @@ def random_object_dynamic_env(
 
         return object_dict
 
-    def paint_objects(frames_arr: NDArray[np.float32], object_dict: Dict[int, Dict], frame_num: int) -> None:
+    def paint_objects(
+        frames_arr: NDArray[np.float32], object_dict: Dict[int, Dict], frame_num: int
+    ) -> None:
         """
         Modify the current frame by reference by painting each object form the object_dict onto it.
         This will not iterate the trajectory indices or make any modifications whatsoever to the object_dict.
@@ -542,7 +635,9 @@ def random_object_dynamic_env(
 
     if encode_velocity:
         # shape is [frames, rows, cols, 3] where the last dim contains (occupancy_val, delta_rows, delta_cols)
-        frames_arr: NDArray[np.float32] = np.zeros((n_frames, env_size[0], env_size[1], 3)).astype(np.float32)
+        frames_arr: NDArray[np.float32] = np.zeros(
+            (n_frames, env_size[0], env_size[1], 3)
+        ).astype(np.float32)
     else:
         # shape is [frames, rows, cols]
         frames_arr = np.zeros((n_frames, env_size[0], env_size[1])).astype(np.float32)
@@ -598,6 +693,8 @@ def generate_training_data(
     iter: int = 0,
     encode_velocity: bool = False,
     velocity_unitvec: bool = False,
+    motion_v: int = 1,
+    speed_range: Tuple[float, float] = (0.5, 2.0),
 ) -> None:
     """
     Generate and save training data for frame prediction models.
@@ -621,6 +718,13 @@ def generate_training_data(
         If True, include velocity channels in the output. Defaults to False.
     velocity_unitvec : bool, optional
         If True, normalize velocity vectors to unit vectors. Defaults to False.
+    motion_v: int, optional (default 1)
+        Type of motion to use.
+            0 = only circle shapes, stationary and linear paths
+            1 = circle and star shapes, stationary and linear and circular paths
+    speed_range: int, optional (default (0.5, 2.0))
+        A range of acceptable speeds at which non-stationary objects will move
+
 
     Returns
     -------
@@ -631,7 +735,15 @@ def generate_training_data(
     scenes_list = []
     for i in range(n_envs):
         print(f"Generating scene {i}/{n_envs} of file {iter}...")
-        scene = random_object_dynamic_env(env_size, n_objects, n_frames, encode_velocity, velocity_unitvec)
+        scene = random_object_dynamic_env(
+            env_size,
+            n_objects,
+            n_frames,
+            encode_velocity,
+            velocity_unitvec,
+            motion_v=motion_v,
+            speed_range=speed_range,
+        )
 
         # DEBUG, this block can be removed later if desired
         assert isinstance(scene, np.ndarray)
@@ -658,7 +770,7 @@ def generate_training_data(
 
     np.save(
         # assue cwd is the TrajectoryPlanning directory (project root)
-        f"./frame_prediction/dynamic_scenes2d/dynamic_scenes2d_motionv01_{env_size[0]}_{n_objects}_{n_envs}_{n_frames}_vel{int(encode_velocity)}_pt{iter:02}.npy",
+        f"./frame_prediction/dynamic_scenes2d/dynamic_scenes2d_motionv{motion_v:02d}_{env_size[0]}_{n_objects}_{n_envs}_{n_frames}_vel{int(encode_velocity)}_pt{iter:02}.npy",
         scenes_arr,
     )
 
@@ -680,7 +792,9 @@ def main() -> None:
     """
     num_files_to_generate = 10
     for iter in range(num_files_to_generate):
-        print(f"Generating file {iter}... (generating {num_files_to_generate} files total)")
+        print(
+            f"Generating file {iter}... (generating {num_files_to_generate} files total)"
+        )
         generate_training_data(
             env_size=(64, 64),
             n_objects=10,
@@ -689,6 +803,8 @@ def main() -> None:
             iter=iter,
             encode_velocity=True,
             velocity_unitvec=False,
+            motion_v=0,
+            speed_range=(0.5, 4),
         )
     print("Done generating files. Exiting...")
 
