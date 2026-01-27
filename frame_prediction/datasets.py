@@ -16,6 +16,7 @@ import numpy as np
 import torch
 from numpy.typing import NDArray
 from torch.utils.data import Dataset
+import bps
 
 
 class DynamicScenes2dDataset(Dataset):
@@ -43,6 +44,7 @@ class DynamicScenes2dDataset(Dataset):
         num_target_frames: int,
         as_numpy: bool = False,
         file_pattern: str = "*.npy",
+        use_bps: bool = False,
     ) -> None:
         """
         Initializes the memory-mapped dataset.
@@ -59,10 +61,14 @@ class DynamicScenes2dDataset(Dataset):
             If True, scenes are provided as numpy.ndarray instead of torch.Tensor (default false)
         file_pattern: str (optional)
             Pattern to match NPY files (default: "*.npy")
+        use_bps: bool
+            whether to bps encode the frames and targets 
         """
         self.as_numpy = as_numpy
         self.num_input_frames = num_input_frames
         self.num_target_frames = num_target_frames
+
+        self.use_bps = use_bps
 
         # Get all NPY files from the directory
         npy_file_paths = sorted(glob.glob(os.path.join(data_directory, file_pattern)))
@@ -149,6 +155,12 @@ class DynamicScenes2dDataset(Dataset):
         # Split into input and target
         input_frames = scene_raw[: self.num_input_frames]
         target_frames = scene_raw[self.num_input_frames : self.num_input_frames + self.num_target_frames]
+
+
+
+        if self.use_bps:
+            input_frames = bps.encode_frames(input_frames)
+            target_frames = bps.encode_frames(target_frames)
 
         # Return in requested type with 32-bit floats
         if self.as_numpy:

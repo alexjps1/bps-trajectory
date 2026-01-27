@@ -449,3 +449,15 @@ def _random_sampling_ncube(
     np.random.seed(None)
 
     return x
+
+def encode_frames(frames, num_dims):
+    "Encodes an array of frames into a grid BPS"
+    enc_frames = []
+    for frame in frames:
+        basis = generate_bps_ngrid(num_dims, 2, minv=0, maxv=63)
+        full, empty = create_scene_point_cloud(frame, create_empty_cloud=True)
+
+        bps_encoding = encode_scene(full, basis, "scalar", "none", empty, grid_shape_for_grid_basis=(num_dims, num_dims))
+        enc_frames.append(bps_encoding)
+    
+    return np.array(enc_frames)
