@@ -54,13 +54,17 @@ class ConvLSTM(nn.Module):
         self.cell = ConvLSTMCell(input_channels, hidden_dim, kernel_size)
         self.hidden_dim = hidden_dim
 
-    def forward(self, x):
+    def forward(self, x, hidden_state=None):
         # x: (B, T, C, H, W)
 
         B, T, C, H, W = x.shape
 
-        h = torch.zeros(B, self.hidden_dim, H, W, device=x.device)
-        c = torch.zeros_like(h)
+        # initialize hidden state if not provided
+        if hidden_state is None:
+            h = torch.zeros(B, self.hidden_dim, H, W, device=x.device)
+            c = torch.zeros_like(h)
+        else:
+            h, c = hidden_state
 
         outputs = []
 
@@ -72,7 +76,9 @@ class ConvLSTM(nn.Module):
 
 
 class StackedConvLSTM(nn.Module):
-    def __init__(self, input_channels: int, hidden_dim: int, kernel_size: int, num_layers: int):
+    def __init__(
+        self, input_channels: int, hidden_dim: int, kernel_size: int, num_layers: int
+    ):
         super().__init__()
         self.num_layers = num_layers
         self.layers = nn.ModuleList()
@@ -81,16 +87,19 @@ class StackedConvLSTM(nn.Module):
             in_ch = input_channels if i == 0 else hidden_dim
             self.layers.append(ConvLSTM(in_ch, hidden_dim, kernel_size))
 
-    def forward(self, x):
+    def forward(self, x, hidden_states=None):
         # x: (B, T, C, H, W)
         output = x
-        final_states = []
+        new_states = []
 
-        for layer in self.layers:
-            output, (h, c) = layer(output)
-            final_states.append((h, c))  # store final hidden + cell states for each layer
+        for i, layer in enumerate(self.layers):
+            # get the hidden state for this layer if available
+            h_state = hidden_states[i] if hidden_states is not None else None
 
-        return output, final_states
+            output, (h, c) = layer(output, h_state)
+            new_states.append((h, c))  # store final hidden + cell states for each layer
+
+        return output, new_states
 
 
 class LSTMSceneToScene02(nn.Module):
@@ -140,7 +149,9 @@ class LSTMSceneToScene02(nn.Module):
         self.num_lstm_layers = num_lstm_layers
         self.kernel_size = kernel_size
 
-        self.convLSTM = StackedConvLSTM(in_channels, hidden_dim, kernel_size, num_lstm_layers)
+        self.convLSTM = StackedConvLSTM(
+            in_channels, hidden_dim, kernel_size, num_lstm_layers
+        )
 
         self.decoder = nn.Conv2d(hidden_dim, in_channels, kernel_size=(1, 1))
         self.activation = nn.Sigmoid()
@@ -192,21 +203,34 @@ class LSTMSceneToScene02(nn.Module):
 
         # Ensure current_sequence has a channel dimension
         if len(frame_sequence.shape) == 4:
-            current_sequence = frame_sequence.unsqueeze(2).clone()
+            current_input = frame_sequence.unsqueeze(2)
         else:
-            current_sequence = frame_sequence.clone()
+            current_input = frame_sequence
 
-        for _ in range(num_steps):
-            # predict next frame
-            # self.forward expects (B, T, C, H, W)
-            next_frame = self.forward(current_sequence)
-            predictions.append(next_frame.unsqueeze(1))
+        # warmup phase
+        # process the entire input history once to build the hidden state
+        lstm_out, hidden_states = self.convLSTM(current_input)
 
-            # update sequence efficiently: drop oldest frame, append prediction
-            # Shift sequence to the left
-            current_sequence[:, :-1] = current_sequence[:, 1:].clone()
-            # Add new frame at the end
-            current_sequence[:, -1] = next_frame
+        # get the last hidden state from the top layer to generate the first prediction
+        # hidden_states is a list of (h, c) tuples
+        # the final model output is h (hidden state) of the last layer
+        last_h = hidden_states[-1][0]
+
+        # generation phase
+        for i in range(num_steps):
+            # get the prediction for this frame by decoding the current hidden state
+            prediction = self.activation(self.decoder(last_h))
+            predictions.append(prediction.unsqueeze(1))
+
+            # determine input for the next step (auto regressive)
+            # TODO add teacher forcing / sample scheduling here by feeding the ground truth instead of the previous prediction
+            next_in = prediction.unsqueeze(1)
+
+            # update the hidden state with only the new frame
+            _, hidden_states = self.convLSTM(next_in, hidden_states)
+
+            # update last_h for the decoder
+            last_h = hidden_states[-1][0]
 
         return torch.cat(predictions, dim=1).squeeze(2)
 
