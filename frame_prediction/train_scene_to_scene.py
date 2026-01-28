@@ -14,6 +14,7 @@ import sys
 from collections.abc import Sized
 from pathlib import Path
 from typing import cast, Dict
+from datetime import datetime
 
 # third party imports
 import json5
@@ -71,8 +72,13 @@ def setup_logging(log_dir: Path, log_name: str) -> None:
     err_log_path = log_dir / f"{log_name}.err"
 
     # Open log files
-    out_file = open(out_log_path, "w")
-    err_file = open(err_log_path, "w")
+    out_file = open(out_log_path, "a")
+    err_file = open(err_log_path, "a")
+
+    # write a separator to tell when a new terminal session started
+    separator = f"--- New Terminal Output from {datetime.now().isoformat()} ---"
+    out_file.write(separator)
+    err_file.write(separator)
 
     # Ensure files are closed on exit
     atexit.register(out_file.close)
