@@ -162,17 +162,25 @@ def train_scene_to_scene(
                 predicted_frames = model.forward_multi_step(
                     input_frames, num_target_frames
                 )
-            predicted_frames_bin: torch.Tensor = (predicted_frames >= 0.5).float()
 
             # loss calculation over all predicted frames
+            # this is the loss metric with which we actually optimize
             batch_bce: torch.Tensor = bce_criterion(
                 predicted_frames, target_frames, reduction="mean"
             )
+
+            # Use detached copies for other loss calculations
+            # This saves memory by excluding them from computational graph, which is fine because we're not using them to optimize
+            predicted_frames_detached: torch.Tensor = predicted_frames.detach()
+            predicted_frames_bin: torch.Tensor = (
+                predicted_frames_detached >= 0.5
+            ).float()
+
             batch_bce_bin: torch.Tensor = bce_criterion(
                 predicted_frames_bin, target_frames, reduction="mean"
             )
             batch_mse: torch.Tensor = mse_criterion(
-                predicted_frames, target_frames, reduction="mean"
+                predicted_frames_detached, target_frames, reduction="mean"
             )
             batch_mse_bin: torch.Tensor = mse_criterion(
                 predicted_frames_bin, target_frames, reduction="mean"
