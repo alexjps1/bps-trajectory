@@ -7,9 +7,9 @@ Moritz Schüler and Alexander João Peterson Santos
 Initially just a copy of the scene reconstruction visualization script
 """
 
+import math
 from pathlib import Path
-from typing import Any, Dict
-
+from typing import Any, Dict, List, cast
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 import numpy as np
@@ -63,12 +63,16 @@ def visualize_grid_difference(
     rgb_image[:, :, 1] = (correct_occupied | correct_free).astype(float)
 
     # Red channel: incorrect predictions
-    false_positive = (grid_pred > 0.5) & (grid_target <= 0.5)  # Predicted occupied but actually free
-    false_negative = (grid_pred <= 0.5) & (grid_target > 0.5)  # Predicted free but actually occupied
+    false_positive = (grid_pred > 0.5) & (
+        grid_target <= 0.5
+    )  # Predicted occupied but actually free
+    false_negative = (grid_pred <= 0.5) & (
+        grid_target > 0.5
+    )  # Predicted free but actually occupied
     rgb_image[:, :, 0] = (false_positive | false_negative).astype(float)
 
     # Create the plot
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
+    _, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
 
     # Plot predicted grid
     ax1.imshow(grid_pred, cmap="gray_r", vmin=0, vmax=1)
@@ -109,18 +113,17 @@ def visualize_grid_difference(
 
 
 def visualize_time_series_grid_difference(
-    predictions: np.ndarray,
-    targets: np.ndarray,
-    output_path: str,
-    num_steps: int = 5,
-    n_rows: int = 3,
-    n_cols: int = 3,
+    predictions: np.ndarray | torch.Tensor,
+    targets: np.ndarray | torch.Tensor,
+    output_path: str | Path,
+    loss_metrics: List[Dict[str, float]] | None = None,
+    input_frames: np.ndarray | torch.Tensor | None = None,
+    n_rows: int | None = None,
+    n_cols: int | None = None,
     threshold: float = 0.5,
     show_window: bool = False,
-    save_image: bool = True
-    
-
-):
+    save_image: bool = True,
+) -> None:
     """
     Visualize grid occupancy predictions vs targets with color coding and save as PNG.
 
@@ -132,6 +135,11 @@ def visualize_time_series_grid_difference(
         Target occupancy grids (N, 64, 64)
     output_path: str (optional)
         path to which to save visualization image if save_image is true
+    loss_metrics: List[Dict[str, float]] (optional)
+        a list containing the
+    input_frames: torch.Tensor or np.ndarray (optional)
+        input frames given to the model
+        If provided, they will be shown. If not, then not.
     num_steps: int
         Number of future steps that are predicted
     n_rows: int
@@ -144,66 +152,192 @@ def visualize_time_series_grid_difference(
         Whether to show the visualization in a window (suspends program until closed, default false)
     save_image: bool (optional)
         Whether to save image at the given output_path (default true)
-    
 
     Returns
     -------
     dict:
         Dictionary containing accuracy metrics
     """
-    fig, axs = plt.subplots(n_rows, n_cols, figsize=(10,10))
-    index = 0
-    for i in range(n_rows):
-        for j in range(n_cols):
-            
-            original = (targets[num_steps + index] > threshold).astype(int)
-            reconstruction = (predictions[index] > threshold).astype(int)
+    # use numpy arrays for everything
+    if isinstance(predictions, torch.Tensor):
+        predictions = predictions.numpy()
+    if isinstance(targets, torch.Tensor):
+        targets = targets.numpy()
+    if input_frames is not None and isinstance(input_frames, torch.Tensor):
+        input_frames = input_frames.numpy()
 
-            match = np.array([(original == 1) & (reconstruction == 1)], dtype=int)
+    # resolve absolute path
+    if isinstance(output_path, str):
+        output_path = Path(output_path).resolve()
 
-            
+    # input validation
+    if len(predictions.shape) != 3:
+        raise ValueError(
+            f"visualize_time_series_grid_difference received predictions tensor with shape {predictions.shape}, but shape must have length 3"
+        )
+    if len(targets.shape) != 3:
+        raise ValueError(
+            f"visualize_time_series_grid_difference received targets tensor with shape {targets.shape}, but shape must have length 3"
+        )
+    if input_frames is not None and len(input_frames.shape) != 3:
+        raise ValueError(
+            f"visualize_time_series_grid_difference received input_frames tensor with shape {input_frames.shape}, but shape must have length 3"
+        )
+    if predictions.shape[0] != targets.shape[0]:
+        raise ValueError(
+            f"in visualize_time_series_grid_difference, predictions tensor has {predictions.shape[0]} time steps but targets tensor has {predictions.shape[0]}. Predictions shape: {predictions.shape}, Targets shape: {targets.shape}"
+        )
 
-            img = original + 2* reconstruction + match
-            img = img.squeeze(0)
+    # figure out how many input truth frames were given
+    num_input_frames: int
+    if input_frames is None:
+        num_input_frames = 0
+    else:
+        num_input_frames = input_frames.shape[0]
 
-            rgb = np.ones((img.shape[0], img.shape[1], 3))
+    # figure out number of predicted/target frames (same number)
+    num_predicted_frames: int = predictions.shape[0]
 
-            rgb[img == 0] = [1, 1, 1]
-            rgb[img == 1] = [0.25, 0.35, 0.85]
-            rgb[img == 2] = [0.85, 0.25, 0.25]
-            rgb[img == 4] = [0.25, 0.75, 0.35]
-            axs[i][j].tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
-            axs[i][j].imshow(rgb)
-            axs[i][j].set_title(f"t + {index + 1}")
+    # determine grid dimensions and num plots needed
+    total_plots = num_input_frames + num_predicted_frames
+    if n_cols is None:
+        if n_rows is None:
+            n_cols = 5
+        else:
+            # If rows are fixed, calculate cols needed
+            n_cols = math.ceil(total_plots / n_rows)
 
-            tp = np.sum(match)
-            precision = tp / np.sum(reconstruction == 1)
+    # calculate rows needed if not provided
+    if n_rows is None:
+        n_rows = math.ceil(total_plots / n_cols)
 
-            fn = np.sum(np.array([(original == 1) & (reconstruction == 0)], dtype=int))
-            recall = tp/(tp+fn)
-            f1 = 2*(precision * recall)/(precision+recall)
-            axs[i][j].text(0.5, 0.08, f"F1: {f1:.3f}", ha='center', va='top', transform=axs[i][j].transAxes)
+    fig, axs = plt.subplots(n_rows, n_cols, figsize=(n_cols * 3.5, n_rows * 4.5))
 
-            index += 1
+    # flatten axs for easy iteration if it's a grid
+    if n_rows * n_cols > 1:
+        axs = axs.flatten()
+    else:
+        axs = [axs]  # Handle single plot case
 
+    cmap_prediction = {
+        0: (1, 1, 1),  # white for true negative (prediction=0, target=0)
+        1: (0.25, 0.35, 0.85),  # blue for false negative (prediction=0, target=1)
+        2: (0.85, 0.25, 0.25),  # red for false positive (prediction=1, target=0)
+        4: (0.25, 0.75, 0.35),  # green for true positive (prediction=1, target=0)
+    }
 
+    plot_idx = 0
 
+    # plot input frames if provided
+    for i in range(num_input_frames):
+        ax = axs[plot_idx]
+
+        frame = cast(np.ndarray, input_frames)[i]
+
+        ax.imshow(frame, cmap="gray_r", vmin=0, vmax=1)
+        ax.set_title(f"Input t-{num_input_frames - i}")
+        ax.axis("off")  # Hide ticks
+
+        plot_idx += 1
+
+    # plot predictions vs targets difference maps
+    for i in range(num_predicted_frames):
+        if plot_idx >= len(axs):
+            break  # Avoid index error if grid is too small
+
+        ax = axs[plot_idx]
+
+        # Get data for this step
+        target_grid = targets[i]
+        pred_grid = predictions[i]
+
+        # Binarize
+        target_bin = (target_grid > threshold).astype(int)
+        pred_bin = (pred_grid > threshold).astype(int)
+
+        match = ((target_bin == 1) & (pred_bin == 1)).astype(int)
+        img_code = target_bin + 2 * pred_bin + match
+
+        # Create RGB Image
+        rgb = np.ones((target_grid.shape[0], target_grid.shape[1], 3))
+        for val, color in cmap_prediction.items():
+            rgb[img_code == val] = color
+
+        ax.imshow(rgb)
+        ax.set_title(f"Pred t+{i+1}")
+        ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+
+        # Render Metrics text below the plot
+        if loss_metrics is not None and i < len(loss_metrics):
+            m = loss_metrics[i]
+
+            # Format text block
+            # BCE | BCE_bin
+            # MSE | MSE_bin
+            # F1  | Acc
+            text_str = (
+                f"BCE: {m.get('bce', 0):.3f} | Bin: {m.get('bce_bin', 0):.3f}\n"
+                f"MSE: {m.get('mse', 0):.3f} | Bin: {m.get('mse_bin', 0):.3f}\n"
+                f"F1:  {m.get('f1', 0):.3f} | Acc: {m.get('accuracy', 0):.3f}"
+            )
+
+            # Place text relative to axes (y=-0.05 puts it just below)
+            ax.text(
+                0.5,
+                -0.02,
+                text_str,
+                transform=ax.transAxes,
+                ha="center",
+                va="top",
+                fontsize=9,
+                family="monospace",
+                bbox=dict(boxstyle="round", facecolor="white", alpha=0.1),
+            )
+
+        plot_idx += 1
+
+    # hide any unused subplots
+    for j in range(plot_idx, len(axs)):
+        axs[j].axis("off")
+
+    # legend
     legend_elements = [
-        Patch(facecolor='green', edgecolor='black', label='True Positive'),
-        Patch(facecolor='red', edgecolor='black', label='False Positive'),
-        Patch(facecolor='blue', edgecolor='black', label='False Negative')
+        Patch(
+            facecolor=cmap_prediction[4], edgecolor="black", label="True Positive"
+        ),  # Green
+        Patch(
+            facecolor=cmap_prediction[1], edgecolor="black", label="False Negative"
+        ),  # Blue
+        Patch(
+            facecolor=cmap_prediction[2], edgecolor="black", label="False Positive"
+        ),  # Red
     ]
-    fig.legend(handles=legend_elements, loc='upper center', ncol=3, bbox_to_anchor=(0.5, 0.95))
-    fig.suptitle("Autoregressive Prediction with Timesteps t-4 to t as Input")
+
+    if input_frames is not None:
+        legend_elements.append(
+            Patch(
+                facecolor=(0.5, 0.5, 0.5),  # gray
+                edgecolor="black",
+                label="Input Frame",
+            )
+        )
+
+    fig.legend(
+        handles=legend_elements,
+        loc="upper center",
+        ncol=4,
+        bbox_to_anchor=(0.5, 1.02),
+        frameon=False,
+    )
+
+    plt.tight_layout()
+
     if show_window:
         plt.show()
-    if save_image:
-        plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close()  # Close the figure to free memory
 
-    return {
-        "F1": f1,
-        "correct_pixels": int(tp),
-        "total_pixels": int(original.shape[0]**2),
-        "output_path": output_path,
-    }
+    if save_image:
+        # create dir for image if it doesn't exist
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=150, bbox_inches="tight")
+
+    plt.close()

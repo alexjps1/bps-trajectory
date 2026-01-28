@@ -19,7 +19,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 # first party imports
-from prediction_vis import visualize_grid_difference
+import prediction_vis
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
 from tqdm import tqdm
@@ -299,6 +299,13 @@ def train_scene_to_scene(
     }
 
 
+# You may need to import this at the top of loops.py
+from prediction_vis import (
+    visualize_grid_difference,
+    visualize_time_series_grid_difference,
+)
+
+
 def evaluate_scene_to_scene(
     model: nn.Module,
     dataloader: DataLoader,
@@ -312,30 +319,6 @@ def evaluate_scene_to_scene(
 ) -> Dict[str, float]:
     """
     Evaluate a scene-to-scene frame prediction model.
-
-    Parameters
-    ----------
-    model: nn.Module
-        The scene-to-scene prediction model
-    dataloader: DataLoader
-        DataLoader for evaluation data (validation or test)
-    num_target_frames: int
-        Number of target frames to predict
-    device: torch.device
-        Device to run evaluation on (default: CPU)
-    run_name: str
-        Run identifier used in image filenames
-    run_path: Path
-        Base directory for run artifacts (images)
-    max_visualizations: int
-        Max number of images to save per evaluation epoch
-    epoch: int | None
-        Epoch index used for labeling images and visualization cadence
-
-    Returns
-    -------
-    tuple[float, float, float, float]
-        Average BCE loss, BCE loss (binarized), MSE loss, MSE loss (binarized)
     """
     model.eval()
 
@@ -354,27 +337,30 @@ def evaluate_scene_to_scene(
     should_visualize = max_visualizations > 0 and epoch is not None and epoch % 5 == 0
     images_path: Path | None = None
     if should_visualize:
-        # create images for this run if it does not exist
         images_path = run_path / "images"
         os.makedirs(images_path, exist_ok=True)
 
     predicted_frames: torch.Tensor
     with torch.no_grad():
         for input_frames, target_frames in dataloader:
-            # move data to device
             input_frames = input_frames.to(device)
             target_frames = target_frames.to(device)
 
             if num_target_frames == 1:
                 predicted_frames = model.forward(input_frames)
+                # Ensure dimension consistency: (B, C, H, W) -> (B, 1, C, H, W)
+                if predicted_frames.ndim == 4:
+                    predicted_frames = predicted_frames.unsqueeze(1)
             else:
                 predicted_frames = model.forward_multi_step(
                     input_frames, num_target_frames
                 )
-            predicted_frames_bin: torch.Tensor = (predicted_frames >= 0.5).float()
 
-            # --- Metrics Calculation ---
-            # Ensure targets are binary for metrics
+            # Detach for metrics calculation to save VRAM
+            predictions_detached = predicted_frames.detach()
+            predicted_frames_bin = (predictions_detached >= 0.5).float()
+
+            # --- Metrics Calculation (Global) ---
             target_frames_bin = (target_frames >= 0.5).float()
 
             # Accuracy
@@ -384,38 +370,105 @@ def evaluate_scene_to_scene(
             tp = (predicted_frames_bin * target_frames_bin).sum()
             fp = (predicted_frames_bin * (1 - target_frames_bin)).sum()
             fn = ((1 - predicted_frames_bin) * target_frames_bin).sum()
-
             batch_f1 = 2 * tp / (2 * tp + fp + fn + 1e-7)
 
             total_accuracy += batch_accuracy.item()
             total_f1_score += batch_f1.item()
-            # ---------------------------
 
+            # --- Visualizations ---
             if should_visualize and saved_visualizations < max_visualizations:
-                batch_size = predicted_frames.size(0)
-                for batch_idx in range(batch_size):
+                batch_size = predictions_detached.size(0)
+
+                for sample_idx in range(batch_size):
                     if saved_visualizations >= max_visualizations:
                         break
+
+                    # 1. Calculate Per-Frame Metrics (BCE, MSE, F1, Acc)
+                    sample_metrics = []
+                    actual_T = predictions_detached.shape[1]
+
+                    for t in range(actual_T):
+                        # Extract frames (C, H, W)
+                        pred_t = predictions_detached[sample_idx, t]
+                        target_t = target_frames[sample_idx, t]
+
+                        # Discretize (Binarize)
+                        pred_bin = (pred_t >= 0.5).float()
+                        target_bin = (target_t >= 0.5).float()
+
+                        # --- Continuous Metrics ---
+                        loss_bce = bce_criterion(pred_t, target_t).item()
+                        loss_mse = mse_criterion(pred_t, target_t).item()
+
+                        # --- Discrete Metrics ---
+                        # BCE on binarized output (Note: can be unstable if prediction is confidently wrong)
+                        loss_bce_bin = bce_criterion(pred_bin, target_bin).item()
+                        loss_mse_bin = mse_criterion(pred_bin, target_bin).item()
+
+                        # Accuracy: Percentage of pixels matching exactly
+                        acc = (pred_bin == target_bin).float().mean().item()
+
+                        # F1 Score
+                        tp = (pred_bin * target_bin).sum()
+                        fp = (pred_bin * (1 - target_bin)).sum()
+                        fn = ((1 - pred_bin) * target_bin).sum()
+
+                        f1 = (2 * tp / (2 * tp + fp + fn + 1e-7)).item()
+
+                        sample_metrics.append(
+                            {
+                                "bce": loss_bce,
+                                "bce_bin": loss_bce_bin,
+                                "mse": loss_mse,
+                                "mse_bin": loss_mse_bin,
+                                "f1": f1,
+                                "accuracy": acc,
+                            }
+                        )
+
+                    # 2. Define Base Filename
                     if epoch is not None:
-                        image_filename = (
-                            f"{run_name}_e{epoch:03d}_img{saved_visualizations:02d}.png"
+                        base_fname = (
+                            f"{run_name}_e{epoch:03d}_img{saved_visualizations:02d}"
                         )
                     else:
-                        image_filename = f"{run_name}_img{saved_visualizations:02d}.png"
-                    image_path = cast(Path, images_path) / image_filename
-                    visualize_grid_difference(
-                        predicted_frames[batch_idx, 0],
-                        target_frames[batch_idx, 0],
+                        base_fname = f"{run_name}_img{saved_visualizations:02d}"
+
+                    img_dir = cast(Path, images_path)
+
+                    # 3. Call Visualization 1: Single Frame Difference (Legacy)
+                    # Only for non-autoregressive (single frame) models
+                    if num_target_frames == 1:
+                        prediction_vis.visualize_grid_difference(
+                            predictions_detached[sample_idx, 0].cpu(),
+                            target_frames[sample_idx, 0].cpu(),
+                            save_image=True,
+                            show_window=False,
+                            output_path=img_dir / f"{base_fname}_singlediff.png",
+                        )
+
+                    # 4. Call Visualization 2: Time Series Grid Difference (New)
+                    # Works for both single-frame and multi-frame
+                    prediction_vis.visualize_time_series_grid_difference(
+                        predictions=predictions_detached[sample_idx]
+                        .squeeze(1)
+                        .cpu(),  # (T, H, W)
+                        targets=target_frames[sample_idx].squeeze(1).cpu(),  # (T, H, W)
+                        input_frames=input_frames[sample_idx]
+                        .squeeze(1)
+                        .cpu(),  # (T_in, H, W)
+                        loss_metrics=sample_metrics,
+                        output_path=img_dir / f"{base_fname}_tseries.png",
                         save_image=True,
                         show_window=False,
-                        output_path=image_path,
                     )
 
+                    # Log to TensorBoard (using the tseries image if available)
                     if writer is not None and epoch is not None:
-                        # Read the saved image and log to tensorboard
                         try:
-                            # imread returns (H, W, 4) for PNG (RGBA)
-                            img_array = plt.imread(str(image_path))
+                            # Prefer tseries image for tensorboard
+                            tb_img_path = img_dir / f"{base_fname}_tseries.png"
+                            img_array = plt.imread(str(tb_img_path))
                             writer.add_image(
                                 f"Prediction/Image_{saved_visualizations:02d}",
                                 img_array,
@@ -427,6 +480,9 @@ def evaluate_scene_to_scene(
 
                     saved_visualizations += 1
 
+            # --- Global Loss Accumulation ---
+            # (Must use attached 'predicted_frames' for BCE to ensure graph correctness if this were training,
+            #  but technically in eval() it doesn't matter. Keeping consistent with training loop logic.)
             batch_bce_loss: torch.Tensor = bce_criterion(
                 predicted_frames, target_frames, reduction="mean"
             )
@@ -434,7 +490,7 @@ def evaluate_scene_to_scene(
                 predicted_frames_bin, target_frames, reduction="mean"
             )
             batch_mse_loss: torch.Tensor = mse_criterion(
-                predicted_frames, target_frames, reduction="mean"
+                predictions_detached, target_frames, reduction="mean"
             )
             batch_mse_loss_bin: torch.Tensor = mse_criterion(
                 predicted_frames_bin, target_frames, reduction="mean"
