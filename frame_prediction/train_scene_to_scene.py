@@ -13,7 +13,7 @@ import copy
 import sys
 from collections.abc import Sized
 from pathlib import Path
-from typing import cast
+from typing import cast, Dict
 
 # third party imports
 import json5
@@ -159,7 +159,11 @@ def objective(
             dropout_rate=dropout_rate,
         )
     elif model_config["type"] == "conv":
-        model = LSTMSceneToScene02(frame_dims=frame_dims, hidden_dim=hidden_dim, num_lstm_layers=num_lstm_layers)
+        model = LSTMSceneToScene02(
+            frame_dims=frame_dims,
+            hidden_dim=hidden_dim,
+            num_lstm_layers=num_lstm_layers,
+        )
     else:
         raise ValueError("Provided model type in config is not defined.")
     model = model.to(device)
@@ -188,7 +192,7 @@ def objective(
 
     # Train with pruning (the loop handles logging and pruning when trial object passed into it)
     try:
-        best_val_loss = loops.train_scene_to_scene(
+        train_summary_dict: Dict[str, float] = loops.train_scene_to_scene(
             model=model,
             train_dataloader=train_dataloader_trial,
             val_dataloader=val_dataloader_trial,
@@ -205,7 +209,7 @@ def objective(
     finally:
         writer.close()
 
-    return best_val_loss
+    return train_summary_dict["best_val_bce_loss"]
 
 
 def suggest_hyperparams(trial: Trial, run_config: dict) -> dict:
@@ -232,7 +236,12 @@ def suggest_hyperparams(trial: Trial, run_config: dict) -> dict:
         hyperparams[name] = suggest_from_space(trial, name, space)
 
     for name, space in training_space.items():
-        if name in {"num_epochs", "epochs_between_evals", "frame_dims", "checkpoint_dir"}:
+        if name in {
+            "num_epochs",
+            "epochs_between_evals",
+            "frame_dims",
+            "checkpoint_dir",
+        }:
             continue
         hyperparams[name] = suggest_from_space(trial, name, space)
 
@@ -341,7 +350,9 @@ def get_dataset(run_config: dict) -> DynamicScenes2dDataset:
 
 def get_split_datasets(
     run_config: dict, dataset: DynamicScenes2dDataset
-) -> tuple[torch.utils.data.Dataset, torch.utils.data.Dataset, torch.utils.data.Dataset]:
+) -> tuple[
+    torch.utils.data.Dataset, torch.utils.data.Dataset, torch.utils.data.Dataset
+]:
     """
     Returns train, val, test (in that order) datasets for the given dataset.
 
@@ -375,14 +386,22 @@ def get_dataloaders(
     """
     Returns train, val, test (in that order) dataloaders for the given datasets and batch size.
     """
-    train_dataloader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
-    val_dataloader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False)
-    test_dataloader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False)
+    train_dataloader = DataLoader(
+        dataset=train_dataset, batch_size=batch_size, shuffle=True
+    )
+    val_dataloader = DataLoader(
+        dataset=val_dataset, batch_size=batch_size, shuffle=False
+    )
+    test_dataloader = DataLoader(
+        dataset=test_dataset, batch_size=batch_size, shuffle=False
+    )
 
     return train_dataloader, val_dataloader, test_dataloader
 
 
-def load_config(train_config_path: str | None, study_config_path: str | None) -> tuple[bool, dict, dict | None]:
+def load_config(
+    train_config_path: str | None, study_config_path: str | None
+) -> tuple[bool, dict, dict | None]:
     """
     Returns is_optuna_study, run_config, study_config
     """
@@ -404,7 +423,9 @@ def load_config(train_config_path: str | None, study_config_path: str | None) ->
         raise ValueError("Neither a single-run nor optuna study config found")
 
 
-def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, device: torch.device) -> None:
+def run_single_training(
+    run_config: dict, dataset: DynamicScenes2dDataset, device: torch.device
+) -> None:
     """
     Note: Does not use resolve_config_value to read values from run_config.
     It is assumed that a single run config file will not contain tuning info
@@ -438,7 +459,9 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
 
     # split dataset and get dataloaders
     train_dataset, val_dataset, test_dataset = get_split_datasets(run_config, dataset)
-    train_dl, val_dl, test_dl = get_dataloaders(train_dataset, val_dataset, test_dataset, training_config["batch_size"])
+    train_dl, val_dl, test_dl = get_dataloaders(
+        train_dataset, val_dataset, test_dataset, training_config["batch_size"]
+    )
 
     num_target_frames = data_config["num_target_frames"]
     frame_dims = tuple(training_config["frame_dims"])
@@ -474,7 +497,7 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
     writer = SummaryWriter(log_dir=run_path / "tensorboard")
 
     try:
-        loops.train_scene_to_scene(
+        train_summary_dict: Dict[str, float] = loops.train_scene_to_scene(
             model=model,
             train_dataloader=train_dl,
             val_dataloader=val_dl,
@@ -487,11 +510,14 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
             run_path=run_path,
             writer=writer,
         )
+        print(
+            f"Completed training with best val bce loss {train_summary_dict['best_val_bce_loss']}"
+        )
     finally:
         writer.close()
 
     print("\nEvaluating on test set...")
-    test_bce, test_bce_bin, test_mse, test_mse_bin = loops.evaluate_scene_to_scene(
+    eval_summary_dict: Dict[str, float] = loops.evaluate_scene_to_scene(
         model=model,
         dataloader=test_dl,
         num_target_frames=num_target_frames,
@@ -499,10 +525,19 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
         run_name=run_name,
         run_path=run_path,
     )
+
+    # unpack values from the evaluation
+    test_bce = eval_summary_dict["avg_val_bce"]
+    test_bce_bin = eval_summary_dict["avg_val_bce_bin"]
+    test_mse = eval_summary_dict["avg_val_mse"]
+    test_mse_bin = eval_summary_dict["avg_val_mse_bin"]
+    test_f1 = eval_summary_dict["avg_val_f1"]
+    test_accuracy = eval_summary_dict["avg_val_accuracy"]
+
     print(
-        f"Test Results | BCE: {test_bce:.6f} | BCE bin: {test_bce_bin:.6f} | "
-        f"MSE: {test_mse:.6f} | MSE bin: {test_mse_bin:.6f}"
+        f"Test Results | BCE: {test_bce:.6f} | BCE bin: {test_bce_bin:.6f} | MSE: {test_mse:.6f} | MSE bin: {test_mse_bin:.6f} | F1: {test_f1:.6f} | Acc: {test_accuracy:.6f}\n"
     )
+
 
 
 def run_optuna_study(
@@ -513,7 +548,9 @@ def run_optuna_study(
 ) -> None:
     study_name = study_config["study"]["name"]
 
-    storage = f"sqlite:///{THIS_DIR}/runs/optuna_storage/{study_config['study']['storage']}"
+    storage = (
+        f"sqlite:///{THIS_DIR}/runs/optuna_storage/{study_config['study']['storage']}"
+    )
     n_trials = study_config["optimization"]["n_trials"]
     timeout = study_config["optimization"]["timeout_seconds"]
     pruner_type = study_config["pruner"]["type"]
@@ -523,13 +560,16 @@ def run_optuna_study(
     batch_size = cast(int, resolve_config_value(training_config.get("batch_size", 1)))
 
     train_dataset, val_dataset, test_dataset = get_split_datasets(run_config, dataset)
-    train_dl, val_dl, test_dl = get_dataloaders(train_dataset, val_dataset, test_dataset, batch_size)
+    train_dl, val_dl, _ = get_dataloaders(
+        train_dataset, val_dataset, test_dataset, batch_size
+    )
     train_size = len(cast(Sized, train_dataset))
     val_size = len(cast(Sized, val_dataset))
     test_size = len(cast(Sized, test_dataset))
     data_directory = data_config["data_directory"]
 
-    print(f"""
+    print(
+        f"""
 Optuna Hyperparameter Tuning for LSTM Frame Prediction
 =======================================================
 
@@ -544,7 +584,8 @@ n_trials: {n_trials}
 study_name: {study_name}
 storage: {storage}
 pruner: {pruner_type}
-    """)
+    """
+    )
 
     # Create pruner
     if pruner_type == "median":
@@ -565,7 +606,9 @@ pruner: {pruner_type}
 
     # Run optimization
     study.optimize(
-        lambda trial: objective(trial, study_name, run_config, train_dl, val_dl, device),
+        lambda trial: objective(
+            trial, study_name, run_config, train_dl, val_dl, device
+        ),
         n_trials=n_trials,
         timeout=timeout,
         show_progress_bar=True,
@@ -600,30 +643,37 @@ pruner: {pruner_type}
     final_model = final_model.to(device)
 
     # Recreate dataloaders with best batch size
-    train_dataloader_final, val_dataloader_final, test_dataloader_final = get_dataloaders(
-        train_dataset, val_dataset, test_dataset, best_params["batch_size"]
+    train_dataloader_final, val_dataloader_final, test_dataloader_final = (
+        get_dataloaders(
+            train_dataset, val_dataset, test_dataset, best_params["batch_size"]
+        )
     )
 
     final_run_name: str = f"{study_name}_finalrun"
     final_run_path: Path = THIS_DIR / "runs" / study_name / final_run_name
 
     # Full training with best hyperparameters
-    loops.train_scene_to_scene(
+    train_summary_dict: Dict[str, float] = loops.train_scene_to_scene(
         model=final_model,
         train_dataloader=train_dataloader_final,
         val_dataloader=val_dataloader_final,
         num_target_frames=num_target_frames,
         device=device,
         num_epochs=cast(int, resolve_config_value(training_config["num_epochs"])),
-        epochs_between_evals=cast(int, resolve_config_value(training_config["epochs_between_evals"])),
+        epochs_between_evals=cast(
+            int, resolve_config_value(training_config["epochs_between_evals"])
+        ),
         learning_rate=best_params["learning_rate"],
         run_name=final_run_name,
         run_path=final_run_path,
     )
+    print(
+        f"Completed final training with best val bce loss {train_summary_dict['best_val_bce_loss']}"
+    )
 
     # Final evaluation on test set
     print("\nEvaluating on test set...")
-    test_bce, test_bce_bin, test_mse, test_mse_bin = loops.evaluate_scene_to_scene(
+    eval_summary_dict: Dict[str, float] = loops.evaluate_scene_to_scene(
         model=final_model,
         dataloader=test_dataloader_final,
         num_target_frames=num_target_frames,
@@ -631,9 +681,16 @@ pruner: {pruner_type}
         run_name=final_run_name,
         run_path=final_run_path,
     )
+    # unpack values from the test
+    test_bce = eval_summary_dict["avg_val_bce"]
+    test_bce_bin = eval_summary_dict["avg_val_bce_bin"]
+    test_mse = eval_summary_dict["avg_val_mse"]
+    test_mse_bin = eval_summary_dict["avg_val_mse_bin"]
+    test_f1 = eval_summary_dict["avg_val_f1"]
+    test_accuracy = eval_summary_dict["avg_val_accuracy"]
+
     print(
-        f"Test Results | BCE: {test_bce:.6f} | BCE bin: {test_bce_bin:.6f} | "
-        f"MSE: {test_mse:.6f} | MSE bin: {test_mse_bin:.6f}"
+        f"Final Test Results | BCE: {test_bce:.6f} | BCE bin: {test_bce_bin:.6f} | MSE: {test_mse:.6f} | MSE bin: {test_mse_bin:.6f} | F1: {test_f1:.6f} | Acc: {test_accuracy:.6f}\n"
     )
 
 
@@ -642,17 +699,23 @@ def main(train_config_path: str | None, study_config_path: str | None) -> None:
     is_optuna_study: bool
     run_config: dict | None
     study_config: dict | None
-    is_optuna_study, run_config, study_config = load_config(train_config_path, study_config_path)
+    is_optuna_study, run_config, study_config = load_config(
+        train_config_path, study_config_path
+    )
 
     # Setup logging to file
     log_dir_name: str
     if is_optuna_study:
         log_dir_name = cast(dict, study_config)["study"]["name"]
-        setup_logging(log_dir=(THIS_DIR / "runs" / log_dir_name / "logs"), log_name=log_dir_name)
+        setup_logging(
+            log_dir=(THIS_DIR / "runs" / log_dir_name / "logs"), log_name=log_dir_name
+        )
         print("Running an Optuna study with multiple training runs.")
     else:
         log_dir_name = run_config["name"]
-        setup_logging(log_dir=(THIS_DIR / "runs" / log_dir_name / "logs"), log_name=log_dir_name)
+        setup_logging(
+            log_dir=(THIS_DIR / "runs" / log_dir_name / "logs"), log_name=log_dir_name
+        )
         print("Running a single training run.")
 
     # Device selection
