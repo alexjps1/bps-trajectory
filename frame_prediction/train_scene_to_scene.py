@@ -700,7 +700,115 @@ pruner: {pruner_type}
     )
 
 
-def main(train_config_path: str | None, study_config_path: str | None) -> None:
+def evaluate_checkpoint(
+    run_config: dict,
+    checkpoint_path: Path,
+    dataset: DynamicScenes2dDataset,
+    device: torch.device,
+) -> None:
+    """
+    Load a model from a checkpoint and evaluate it on the test set.
+    Also checks the maximum predicted value to detect dead models.
+    """
+    print(f"\n--- Evaluating Checkpoint: {checkpoint_path} ---\n")
+
+    # 1. Initialize Model
+    training_config = run_config["training"]
+    data_config = run_config["data"]
+    model_config = run_config["model"]
+    frame_dims = tuple(training_config["frame_dims"])
+
+    if model_config["type"] == "linear":
+        model = LSTMSceneToScene01(
+            frame_dims=frame_dims,
+            hidden_dim=model_config["hidden_dim"],
+            num_lstm_layers=model_config["num_lstm_layers"],
+            dropout_rate=model_config["dropout_rate"],
+        )
+    elif model_config["type"] == "conv":
+        model = LSTMSceneToScene02(
+            frame_dims=frame_dims,
+            hidden_dim=model_config["hidden_dim"],
+            num_lstm_layers=model_config["num_lstm_layers"],
+        )
+    else:
+        raise ValueError("Provided model type in config is not defined.")
+
+    model = model.to(device)
+
+    # 2. Load Checkpoint
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found at {checkpoint_path}")
+
+    print("Loading model weights...")
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    if "model_state_dict" in checkpoint:
+        model.load_state_dict(checkpoint["model_state_dict"])
+    else:
+        model.load_state_dict(checkpoint)
+
+    model.eval()
+
+    # 3. Prepare Data
+    print("Preparing test dataset...")
+    train_dataset, val_dataset, test_dataset = get_split_datasets(run_config, dataset)
+    batch_size = training_config.get("batch_size", 1)
+    
+    # We only need the test dataloader
+    _, _, test_dl = get_dataloaders(
+        train_dataset, val_dataset, test_dataset, batch_size
+    )
+
+    # 4. Max Value Check
+    print("Checking model output range (max value)...")
+    max_pred = -float("inf")
+    num_target_frames = data_config["num_target_frames"]
+
+    # Use tqdm if possible, or just simple loop
+    with torch.no_grad():
+        for inputs, _ in test_dl:
+            inputs = inputs.to(device)
+            if num_target_frames == 1:
+                preds = model(inputs)
+            else:
+                preds = model.forward_multi_step(inputs, num_target_frames)
+            
+            # Check max value in this batch
+            current_max = preds.max().item()
+            if current_max > max_pred:
+                max_pred = current_max
+    
+    print(f"Maximum predicted scalar value in test set: {max_pred:.6f}")
+    if max_pred < 0.01:
+         print("WARNING: Model appears to be outputting near-zero values (Dead ReLU/Sigmoid saturation?).")
+
+    # 5. Standard Evaluation
+    print("Running standard evaluation metrics...")
+    # Use parent directory of checkpoint for output (likely 'checkpoints'), 
+    # so we go up one level to the run directory
+    run_path = checkpoint_path.parent.parent
+    eval_run_name = f"eval_{checkpoint_path.stem}"
+
+    eval_summary = loops.evaluate_scene_to_scene(
+        model=model,
+        dataloader=test_dl,
+        num_target_frames=num_target_frames,
+        device=device,
+        run_name=eval_run_name,
+        run_path=run_path,
+        max_visualizations=5, # Generate a few visualizations during explicit eval
+        epoch=999, # Dummy epoch number for file naming
+    )
+
+    print("\nEvaluation Summary:")
+    print(json5.dumps(eval_summary, indent=2))
+
+
+def main(
+    train_config_path: str | None,
+    study_config_path: str | None,
+    evaluate_checkpoint_path: Path | None = None,
+) -> None:
     # Load configuration to get the study name for logging
     is_optuna_study: bool
     run_config: dict | None
@@ -731,6 +839,13 @@ def main(train_config_path: str | None, study_config_path: str | None) -> None:
     # get dataset
     dataset = get_dataset(run_config)
 
+    if evaluate_checkpoint_path:
+        if is_optuna_study:
+            print("Warning: Evaluating using a study config. Using the 'run' section as base config.")
+        
+        evaluate_checkpoint(run_config, evaluate_checkpoint_path, dataset, device)
+        return
+
     if is_optuna_study:
         run_optuna_study(run_config, cast(dict, study_config), dataset, device)
     else:
@@ -756,6 +871,15 @@ if __name__ == "__main__":
         help="Path to json file containing optuna study settings, inluding which hyperparameters to tune and how many runs to perform.",
         required=False,
     )
+    
+    parser.add_argument(
+        "--evaluate",
+        "-e",
+        type=Path,
+        metavar="FILE",
+        help="Path to a checkpoint .pt file to evaluate. Requires --train to provide the model configuration.",
+        required=False,
+    )
 
     args = parser.parse_args()
 
@@ -765,4 +889,4 @@ if __name__ == "__main__":
     if args.train and args.study:
         raise ValueError("Cannot provide two config files.")
 
-    main(args.train, args.study)
+    main(args.train, args.study, args.evaluate)
