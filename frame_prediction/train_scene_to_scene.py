@@ -640,12 +640,23 @@ pruner: {pruner_type}
     frame_dims = tuple(training_config["frame_dims"])
     num_target_frames = data_config["num_target_frames"]
 
-    final_model = LSTMSceneToScene01(
-        frame_dims=frame_dims,
-        hidden_dim=best_params["hidden_dim"],
-        num_lstm_layers=best_params["num_lstm_layers"],
-        dropout_rate=best_params["dropout_rate"],
-    )
+    if run_config["type"] == "linear":
+        final_model = LSTMSceneToScene01(
+            frame_dims=frame_dims,
+            hidden_dim=best_params["hidden_dim"],
+            num_lstm_layers=best_params["num_lstm_layers"],
+            dropout_rate=best_params["dropout_rate"],
+        )
+    elif run_config["type"] == "conv":
+        final_model = LSTMSceneToScene02(
+            frame_dims=frame_dims,
+            hidden_dim=best_params["hidden_dim"],
+            num_lstm_layers=best_params["num_lstm_layers"],
+        )
+    else:
+        raise ValueError("Provided model type in config is not defined.")
+
+
     final_model = final_model.to(device)
 
     # Recreate dataloaders with best batch size
