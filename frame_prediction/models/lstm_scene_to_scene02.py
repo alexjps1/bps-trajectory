@@ -183,6 +183,8 @@ class LSTMSceneToScene02(nn.Module):
         self,
         frame_sequence: torch.Tensor,
         num_steps: int,
+        teacher_forcing_prob: float,
+        target_sequence: torch.Tensor,
     ) -> torch.Tensor:
         """
         Predict multiple future frames autoregressively.
@@ -193,6 +195,10 @@ class LSTMSceneToScene02(nn.Module):
             Input sequence of frames with shape (batch_size, num_frames, height, width)
         num_steps: int
             Number of future frames to predict
+        teacher_forcing_prob: float
+            Probability that target is used as next input
+        target_sequence: torch.Tensor
+            Target sequence of frames with shape (batch_size, num_frames, heigth, width)
 
         Returns
         -------
@@ -223,8 +229,11 @@ class LSTMSceneToScene02(nn.Module):
             predictions.append(prediction.unsqueeze(1))
 
             # determine input for the next step (auto regressive)
-            # TODO add teacher forcing / sample scheduling here by feeding the ground truth instead of the previous prediction
-            next_in = prediction.unsqueeze(1)
+
+            if teacher_forcing_prob is not None and np.random.random() < teacher_forcing_prob:
+                next_in = target_sequence[:, i:i+1]
+            else:
+                next_in = prediction.unsqueeze(1)
 
             # update the hidden state with only the new frame
             _, hidden_states = self.convLSTM(next_in, hidden_states)

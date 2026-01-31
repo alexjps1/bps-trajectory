@@ -159,8 +159,9 @@ def train_scene_to_scene(
                 predicted_frames = model.forward(input_frames)
             else:
                 # Use multi-step for predicting multiple frames autoregressively
+                teacher_forcing_prob = max(1 - epoch/(num_epochs/2), 0) # linear decay until half of num_epochs reached, then stays 0
                 predicted_frames = model.forward_multi_step(
-                    input_frames, num_target_frames
+                    input_frames, num_target_frames, teacher_forcing_prob, target_frames
                 )
 
             # loss calculation over all predicted frames
