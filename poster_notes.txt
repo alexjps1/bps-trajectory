@@ -1,0 +1,48 @@
+Motivation
+    Point cloud data is everywhere, for example car and drone sensors  (LIDAR)
+
+    But Point Cloud Data:
+        • Do not have a fixed cardinality
+        • Are not registered (it is not trivial to bring two scans of the same scene into spatial alignment)
+        • Have no notion of neighbourhood (Convolution is not possible)
+        • Are not ordered
+
+    --> use Basis Point Sets as encoding:
+        • Variable number of elements
+        • Registered (for grid as basis)
+        • Clear neighbourhood
+        • Ordered
+        
+        
+    This Project explores BPS as encoding for motion planning tasks, including four main experiments.
+
+    Static Objects:
+        1. It investigates how well a scene can be reconstructed from a BPS encoding using CNNs and classical geometric reconstruction techniques.
+        2. How well does a RL agent that was trained on full occupancy grids perform on reconstructed scenes?
+        
+    Dynamic Objects:
+        3. How well can a LSTMs predict future dynamic scenes?
+        4. Compared to LSTMs that predict the future BPS, which is then decoded to a future scene?
+	
+
+
+BPS Explanation
+
+
+
+
+
+Static Obstacles Experiments
+
+
+
+
+
+
+Moving Obstacles Experiments
+
+
+
+
+
+Conclusion
