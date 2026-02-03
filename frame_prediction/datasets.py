@@ -8,6 +8,7 @@ Moritz Schüler and Alexander João Peterson Santos
 # standard library imports
 import glob
 import os
+import sys
 from pathlib import Path
 from typing import List, Tuple
 
@@ -16,6 +17,11 @@ import numpy as np
 import torch
 from numpy.typing import NDArray
 from torch.utils.data import Dataset
+
+# import bps from project root
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.join(current_dir, "..")
+sys.path.insert(0, parent_dir)
 
 import bps
 
