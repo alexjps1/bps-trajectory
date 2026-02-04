@@ -34,6 +34,20 @@ from models.lstm_scene_to_scene02 import LSTMSceneToScene02
 THIS_DIR = Path(__file__).resolve().parent
 
 
+VALID_TEACHER_FORCING_MODES = {"always", "off", "scheduled_sampling"}
+
+
+def validate_teacher_forcing_config(training_config: dict) -> None:
+    """Validate teacher_forcing and scheduled_sampling_decay values in a training config."""
+    tf_mode = training_config.get("teacher_forcing", "off")
+    if tf_mode not in VALID_TEACHER_FORCING_MODES:
+        raise ValueError(f"Invalid teacher_forcing value '{tf_mode}'. Must be one of {VALID_TEACHER_FORCING_MODES}")
+
+    decay = training_config.get("scheduled_sampling_decay", 1.0)
+    if not isinstance(decay, (int, float)) or decay < 0:
+        raise ValueError(f"scheduled_sampling_decay must be a non-negative number, got {decay}")
+
+
 class Tee:
     """A helper class to tee output to a file and a stream."""
 
@@ -139,6 +153,7 @@ def objective(
     # Extract fixed parameters from config
     data_config = search_space_config["data"]
     training_config = search_space_config["training"]
+    validate_teacher_forcing_config(training_config)
     num_target_frames = data_config["num_target_frames"]
     frame_dims = tuple(training_config["frame_dims"])
     num_epochs = training_config["num_epochs"]
@@ -209,6 +224,8 @@ def objective(
             learning_rate=learning_rate,
             run_name=run_name,
             run_path=run_path,
+            teacher_forcing=training_config.get("teacher_forcing", "off"),
+            scheduled_sampling_decay=training_config.get("scheduled_sampling_decay", 0.99),
             trial=trial,
             writer=writer,
         )
@@ -451,6 +468,7 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
     assert isinstance(model_config["hidden_dim"], int)
     assert isinstance(model_config["num_lstm_layers"], int)
     assert isinstance(model_config["dropout_rate"], (int, float))
+    validate_teacher_forcing_config(training_config)
 
     # split dataset and get dataloaders
     train_dataset, val_dataset, test_dataset = get_split_datasets(run_config, dataset)
@@ -501,6 +519,8 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
             learning_rate=training_config["learning_rate"],
             run_name=run_name,
             run_path=run_path,
+            teacher_forcing=training_config.get("teacher_forcing", "off"),
+            scheduled_sampling_decay=training_config.get("scheduled_sampling_decay", 0.99),
             writer=writer,
         )
         print(f"Completed training with best val bce loss {train_summary_dict['best_val_bce_loss']}")
@@ -656,6 +676,8 @@ pruner: {pruner_type}
         learning_rate=best_params["learning_rate"],
         run_name=final_run_name,
         run_path=final_run_path,
+        teacher_forcing=training_config.get("teacher_forcing", "off"),
+        scheduled_sampling_decay=training_config.get("scheduled_sampling_decay", 0.99),
     )
     print(f"Completed final training with best val bce loss {train_summary_dict['best_val_bce_loss']}")
 

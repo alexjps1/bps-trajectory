@@ -8,18 +8,18 @@ Moritz Schüler and Alexander João Peterson Santos
 # standard library imports
 import os
 from pathlib import Path
-from typing import cast, Dict
+from typing import Dict, cast
 
 # third party imports
 import matplotlib.pyplot as plt
 import optuna
+
+# first party imports
+import prediction_vis
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-
-# first party imports
-import prediction_vis
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
 from tqdm import tqdm
@@ -58,6 +58,8 @@ def train_scene_to_scene(
     learning_rate: float,
     run_name: str,
     run_path: Path,
+    teacher_forcing: str = "off",
+    scheduled_sampling_decay: float = 0.99,
     trial=None,
     writer: SummaryWriter | None = None,
 ) -> Dict[str, float]:
@@ -88,6 +90,14 @@ def train_scene_to_scene(
         Run identifier used in checkpoint and image filenames
     run_path: Path
         Base directory for run artifacts (checkpoints/images)
+    teacher_forcing: str
+        Teacher forcing mode: "always", "off", or "scheduled_sampling"
+    scheduled_sampling_decay: float
+        Controls the linear decay speed of teacher forcing probability.
+        Only used when teacher_forcing is "scheduled_sampling".
+        p(epoch) = max(1.0 - epoch * decay / num_epochs, 0.0)
+        A value of 1.0 means p reaches 0 at the final epoch.
+        A value of 2.0 means p reaches 0 at the halfway point.
     trial: optuna.trial.Trial | None
         Optional Optuna trial for reporting and pruning
 
@@ -158,34 +168,29 @@ def train_scene_to_scene(
                 # Use the more efficient forward method for single-frame prediction
                 predicted_frames = model.forward(input_frames)
             else:
+                # Determine teacher forcing probability for this epoch
+                if teacher_forcing == "always":
+                    tf_prob = 1.0
+                elif teacher_forcing == "scheduled_sampling":
+                    tf_prob = max(1.0 - epoch * scheduled_sampling_decay / num_epochs, 0.0)
+                else:  # "off"
+                    tf_prob = 0.0
+
                 # Use multi-step for predicting multiple frames autoregressively
-                teacher_forcing_prob = max(1 - epoch/(num_epochs/2), 0) # linear decay until half of num_epochs reached, then stays 0
-                predicted_frames = model.forward_multi_step(
-                    input_frames, num_target_frames, teacher_forcing_prob, target_frames
-                )
+                predicted_frames = model.forward_multi_step(input_frames, num_target_frames, tf_prob, target_frames)
 
             # loss calculation over all predicted frames
             # this is the loss metric with which we actually optimize
-            batch_bce: torch.Tensor = bce_criterion(
-                predicted_frames, target_frames, reduction="mean"
-            )
+            batch_bce: torch.Tensor = bce_criterion(predicted_frames, target_frames, reduction="mean")
 
             # Use detached copies for other loss calculations
             # This saves memory by excluding them from computational graph, which is fine because we're not using them to optimize
             predicted_frames_detached: torch.Tensor = predicted_frames.detach()
-            predicted_frames_bin: torch.Tensor = (
-                predicted_frames_detached >= 0.5
-            ).float()
+            predicted_frames_bin: torch.Tensor = (predicted_frames_detached >= 0.5).float()
 
-            batch_bce_bin: torch.Tensor = bce_criterion(
-                predicted_frames_bin, target_frames, reduction="mean"
-            )
-            batch_mse: torch.Tensor = mse_criterion(
-                predicted_frames_detached, target_frames, reduction="mean"
-            )
-            batch_mse_bin: torch.Tensor = mse_criterion(
-                predicted_frames_bin, target_frames, reduction="mean"
-            )
+            batch_bce_bin: torch.Tensor = bce_criterion(predicted_frames_bin, target_frames, reduction="mean")
+            batch_mse: torch.Tensor = mse_criterion(predicted_frames_detached, target_frames, reduction="mean")
+            batch_mse_bin: torch.Tensor = mse_criterion(predicted_frames_bin, target_frames, reduction="mean")
 
             # backward pass and optimization (optimizing BCE)
             batch_bce.backward()
@@ -268,9 +273,7 @@ def train_scene_to_scene(
                 )
                 save_filename: str = f"{run_name}_e{epoch:02d}.pt"
                 save_filepath: Path = checkpoint_path / save_filename
-                save_checkpoint(
-                    model, epoch, optimizer, avg_val_bce_loss, save_filepath
-                )
+                save_checkpoint(model, epoch, optimizer, avg_val_bce_loss, save_filepath)
 
             if trial is not None:
                 trial.report(avg_val_bce_loss, epoch)
@@ -287,9 +290,7 @@ def train_scene_to_scene(
         avg_train_mse_loss,
         avg_train_mse_loss_bin,
     ]:
-        raise ValueError(
-            "Infinite loss found in one of the loss measures. There was a problem with the training loop."
-        )
+        raise ValueError("Infinite loss found in one of the loss measures. There was a problem with the training loop.")
 
     return {
         "best_val_bce_loss": best_val_bce_loss,  # bce loss is used by the parameter optimizer (Adam) and by hyperparameter optimizer (Optuna)
@@ -349,13 +350,13 @@ def evaluate_scene_to_scene(
 
             if num_target_frames == 1:
                 predicted_frames = model.forward(input_frames)
-                # Ensure dimension consistency: (B, C, H, W) -> (B, 1, C, H, W)
-                if predicted_frames.ndim == 4:
+                # Ensure dimension consistency: add temporal dim if missing
+                # Model01 returns (B, H, W) -> (B, 1, H, W)
+                # Model02 returns (B, 1, H, W) which already matches target shape
+                if predicted_frames.ndim == 3:
                     predicted_frames = predicted_frames.unsqueeze(1)
             else:
-                predicted_frames = model.forward_multi_step(
-                    input_frames, num_target_frames
-                )
+                predicted_frames = model.forward_multi_step(input_frames, num_target_frames)
 
             # Detach for metrics calculation to save VRAM
             predictions_detached = predicted_frames.detach()
@@ -429,9 +430,7 @@ def evaluate_scene_to_scene(
 
                     # 2. Define Base Filename
                     if epoch is not None:
-                        base_fname = (
-                            f"{run_name}_e{epoch:03d}_img{saved_visualizations:02d}"
-                        )
+                        base_fname = f"{run_name}_e{epoch:03d}_img{saved_visualizations:02d}"
                     else:
                         base_fname = f"{run_name}_img{saved_visualizations:02d}"
 
@@ -451,13 +450,9 @@ def evaluate_scene_to_scene(
                     # 4. Call Visualization 2: Time Series Grid Difference (New)
                     # Works for both single-frame and multi-frame
                     prediction_vis.visualize_time_series_grid_difference(
-                        predictions=predictions_detached[sample_idx]
-                        .squeeze(1)
-                        .cpu(),  # (T, H, W)
+                        predictions=predictions_detached[sample_idx].squeeze(1).cpu(),  # (T, H, W)
                         targets=target_frames[sample_idx].squeeze(1).cpu(),  # (T, H, W)
-                        input_frames=input_frames[sample_idx]
-                        .squeeze(1)
-                        .cpu(),  # (T_in, H, W)
+                        input_frames=input_frames[sample_idx].squeeze(1).cpu(),  # (T_in, H, W)
                         loss_metrics=sample_metrics,
                         output_path=img_dir / f"{base_fname}_tseries.png",
                         save_image=True,
@@ -484,18 +479,10 @@ def evaluate_scene_to_scene(
             # --- Global Loss Accumulation ---
             # (Must use attached 'predicted_frames' for BCE to ensure graph correctness if this were training,
             #  but technically in eval() it doesn't matter. Keeping consistent with training loop logic.)
-            batch_bce_loss: torch.Tensor = bce_criterion(
-                predicted_frames, target_frames, reduction="mean"
-            )
-            batch_bce_loss_bin: torch.Tensor = bce_criterion(
-                predicted_frames_bin, target_frames, reduction="mean"
-            )
-            batch_mse_loss: torch.Tensor = mse_criterion(
-                predictions_detached, target_frames, reduction="mean"
-            )
-            batch_mse_loss_bin: torch.Tensor = mse_criterion(
-                predicted_frames_bin, target_frames, reduction="mean"
-            )
+            batch_bce_loss: torch.Tensor = bce_criterion(predicted_frames, target_frames, reduction="mean")
+            batch_bce_loss_bin: torch.Tensor = bce_criterion(predicted_frames_bin, target_frames, reduction="mean")
+            batch_mse_loss: torch.Tensor = mse_criterion(predictions_detached, target_frames, reduction="mean")
+            batch_mse_loss_bin: torch.Tensor = mse_criterion(predicted_frames_bin, target_frames, reduction="mean")
 
             total_bce_loss += batch_bce_loss.item()
             total_bce_loss_bin += batch_bce_loss_bin.item()

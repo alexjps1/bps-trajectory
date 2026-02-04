@@ -119,6 +119,8 @@ class LSTMSceneToScene01(nn.Module):
         self,
         frame_sequence: torch.Tensor,
         num_steps: int,
+        teacher_forcing_prob: float = 0.0,
+        target_sequence: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Predict multiple future frames autoregressively.
@@ -129,25 +131,39 @@ class LSTMSceneToScene01(nn.Module):
             Input sequence of frames with shape (batch_size, num_frames, height, width)
         num_steps: int
             Number of future frames to predict
+        teacher_forcing_prob: float
+            Probability that target is used as next input (default: 0.0, pure autoregressive)
+        target_sequence: torch.Tensor | None
+            Target sequence of frames with shape (batch_size, num_steps, height, width).
+            Required when teacher_forcing_prob > 0.
 
         Returns
         -------
         torch.Tensor
             Predicted frames with shape (batch_size, num_steps, height, width)
         """
+        if teacher_forcing_prob > 0.0 and target_sequence is None:
+            raise ValueError("target_sequence is required when teacher_forcing_prob > 0")
+
         predictions = []
         current_sequence = frame_sequence.clone()
 
-        for _ in range(num_steps):
+        for i in range(num_steps):
             # predict next frame
             next_frame = self.forward(current_sequence)
             predictions.append(next_frame.unsqueeze(1))
 
-            # update sequence: drop oldest frame, append prediction
+            # determine input for the next step
+            if teacher_forcing_prob > 0.0 and np.random.random() < teacher_forcing_prob:
+                next_input = target_sequence[:, i]
+            else:
+                next_input = next_frame
+
+            # update sequence: drop oldest frame, append next input
             current_sequence = torch.cat(
                 [
                     current_sequence[:, 1:, :, :],
-                    next_frame.unsqueeze(1),
+                    next_input.unsqueeze(1),
                 ],
                 dim=1,
             )
