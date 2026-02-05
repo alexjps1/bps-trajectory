@@ -171,6 +171,9 @@ def visualize_time_series_grid_difference(
     if input_frames is not None and isinstance(input_frames, torch.Tensor):
         input_frames = input_frames.numpy()
 
+    # Capture max prediction value before discretization for debugging
+    max_pred_value = float(np.max(predictions))
+
     # resolve absolute path
     if isinstance(output_path, str):
         output_path = Path(output_path).resolve()
@@ -357,6 +360,18 @@ def visualize_time_series_grid_difference(
     )
 
     plt.tight_layout()
+
+    # Add debug info: max prediction value (before discretization)
+    fig.text(
+        0.98,
+        0.02,
+        f"max pred: {max_pred_value:.4f}",
+        ha="right",
+        va="bottom",
+        fontsize=8,
+        color="lightgrey",
+        alpha=0.7,
+    )
 
     if show_window:
         plt.show()
