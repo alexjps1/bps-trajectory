@@ -10,10 +10,11 @@ Initially just a copy of the scene reconstruction visualization script
 import math
 from pathlib import Path
 from typing import Any, Dict, List, cast
+
 import matplotlib.pyplot as plt
-from matplotlib.patches import Patch
 import numpy as np
 import torch
+from matplotlib.patches import Patch
 
 # constants
 ArrayLike = np.ndarray | torch.Tensor
@@ -95,7 +96,7 @@ def visualize_grid_difference(
     if show_window:
         plt.show()
     if save_image:
-        plt.savefig(output_path, dpi=150, bbox_inches="tight")
+        plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close()  # Close the figure to free memory
 
     # Calculate accuracy metrics
@@ -123,6 +124,7 @@ def visualize_time_series_grid_difference(
     threshold: float = 0.5,
     show_window: bool = False,
     save_image: bool = True,
+    target_frame_offset: int = 0,
 ) -> None:
     """
     Visualize grid occupancy predictions vs targets with color coding and save as PNG.
@@ -140,6 +142,9 @@ def visualize_time_series_grid_difference(
     input_frames: torch.Tensor or np.ndarray (optional)
         input frames given to the model
         If provided, they will be shown. If not, then not.
+    target_frame_offset: int (optional)
+        If using an offset between the last input frame and the first predicted frame, pass it here.
+        This just updates the axes' titles so they don´t start with t+1.
     num_steps: int
         Number of future steps that are predicted
     n_rows: int
@@ -185,7 +190,7 @@ def visualize_time_series_grid_difference(
         )
     if predictions.shape[0] != targets.shape[0]:
         raise ValueError(
-            f"in visualize_time_series_grid_difference, predictions tensor has {predictions.shape[0]} time steps but targets tensor has {predictions.shape[0]}. Predictions shape: {predictions.shape}, Targets shape: {targets.shape}"
+            f"in visualize_time_series_grid_difference, predictions tensor has {predictions.shape[0]} time steps but targets tensor has {targets.shape[0]}. Predictions shape: {predictions.shape}, Targets shape: {targets.shape}"
         )
 
     # figure out how many input truth frames were given
@@ -199,17 +204,22 @@ def visualize_time_series_grid_difference(
     num_predicted_frames: int = predictions.shape[0]
 
     # determine grid dimensions and num plots needed
-    total_plots = num_input_frames + num_predicted_frames
+    # If we have input frames, we need to round up to ensure predictions start on a new row
     if n_cols is None:
         if n_rows is None:
             n_cols = 5
         else:
             # If rows are fixed, calculate cols needed
+            total_plots = num_input_frames + num_predicted_frames
             n_cols = math.ceil(total_plots / n_rows)
 
     # calculate rows needed if not provided
     if n_rows is None:
-        n_rows = math.ceil(total_plots / n_cols)
+        # Calculate rows for input frames (rounded up to full rows)
+        input_rows = math.ceil(num_input_frames / n_cols) if num_input_frames > 0 else 0
+        # Calculate rows for predicted frames
+        pred_rows = math.ceil(num_predicted_frames / n_cols)
+        n_rows = input_rows + pred_rows
 
     fig, axs = plt.subplots(n_rows, n_cols, figsize=(n_cols * 3.5, n_rows * 4.5))
 
@@ -235,10 +245,20 @@ def visualize_time_series_grid_difference(
         frame = cast(np.ndarray, input_frames)[i]
 
         ax.imshow(frame, cmap="gray_r", vmin=0, vmax=1)
-        ax.set_title(f"Input t-{num_input_frames - i}")
+        ax.set_title(f"Input t-{num_input_frames - i}", fontsize=14, fontweight="bold")
         ax.axis("off")  # Hide ticks
 
         plot_idx += 1
+
+    # After plotting input frames, ensure predicted frames start on a new row
+    if num_input_frames > 0 and plot_idx % n_cols != 0:
+        # Hide the blank axes before moving to next row
+        old_plot_idx = plot_idx
+        # Move to the start of the next row
+        plot_idx = ((plot_idx // n_cols) + 1) * n_cols
+        # Hide all the blank spaces between input frames and predicted frames
+        for j in range(old_plot_idx, plot_idx):
+            axs[j].axis("off")
 
     # plot predictions vs targets difference maps
     for i in range(num_predicted_frames):
@@ -264,34 +284,40 @@ def visualize_time_series_grid_difference(
             rgb[img_code == val] = color
 
         ax.imshow(rgb)
-        ax.set_title(f"Pred t+{i+1}")
+        # Calculate the actual frame index accounting for offset
+        actual_frame_idx = i + 1 + target_frame_offset
+        ax.set_title(f"Pred t+{actual_frame_idx}", fontsize=14, fontweight="bold")
         ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
 
         # Render Metrics text below the plot
         if loss_metrics is not None and i < len(loss_metrics):
             m = loss_metrics[i]
 
-            # Format text block
-            # BCE | BCE_bin
-            # MSE | MSE_bin
-            # F1  | Acc
-            text_str = (
-                f"BCE: {m.get('bce', 0):.3f} | Bin: {m.get('bce_bin', 0):.3f}\n"
-                f"MSE: {m.get('mse', 0):.3f} | Bin: {m.get('mse_bin', 0):.3f}\n"
-                f"F1:  {m.get('f1', 0):.3f} | Acc: {m.get('accuracy', 0):.3f}"
-            )
+            # Format text as two columns, left-aligned within each
+            col1_text = f"BCE: {m.get('bce', 0):.3f}\nMSE: {m.get('mse', 0):.3f}\nF1:  {m.get('f1', 0):.3f}"
+            col2_text = f"BCE bin: {m.get('bce_bin', 0):.3f}\nMSE bin: {m.get('mse_bin', 0):.3f}\nAcc:     {m.get('accuracy', 0):.3f}"
 
-            # Place text relative to axes (y=-0.05 puts it just below)
+            # Place left column
             ax.text(
-                0.5,
+                0.0,
                 -0.02,
-                text_str,
+                col1_text,
                 transform=ax.transAxes,
-                ha="center",
+                ha="left",
                 va="top",
-                fontsize=9,
+                fontsize=13,
                 family="monospace",
-                bbox=dict(boxstyle="round", facecolor="white", alpha=0.1),
+            )
+            # Place right column
+            ax.text(
+                1.0,
+                -0.02,
+                col2_text,
+                transform=ax.transAxes,
+                ha="right",
+                va="top",
+                fontsize=13,
+                family="monospace",
             )
 
         plot_idx += 1
@@ -338,6 +364,6 @@ def visualize_time_series_grid_difference(
     if save_image:
         # create dir for image if it doesn't exist
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_path, dpi=150, bbox_inches="tight")
+        plt.savefig(output_path, dpi=300, bbox_inches="tight")
 
     plt.close()
