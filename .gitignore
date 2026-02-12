@@ -2,6 +2,11 @@
 /rl_agent/rl_agent_static_tensorboard
 /rl_agent/models
 /rl_agent/__pycache__
+/frame_prediction/dynamic_scenes2d
+/frame_prediction/checkpoints
+/frame_prediction/plots
+/frame_prediction/trained_models
+/frame_prediction/losses
 __pycache__/
 *sublime-project
 *sublime-workspace
