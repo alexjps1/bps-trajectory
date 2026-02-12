@@ -8,6 +8,7 @@ Moritz Schüler and Alexander João Peterson Santos
 # standard library imports
 import glob
 import os
+import sys
 from pathlib import Path
 from typing import List, Tuple
 
@@ -16,6 +17,12 @@ import numpy as np
 import torch
 from numpy.typing import NDArray
 from torch.utils.data import Dataset
+
+# import bps from project root
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.join(current_dir, "..")
+sys.path.insert(0, parent_dir)
+
 import bps
 
 
@@ -36,6 +43,7 @@ class DynamicScenes2dDataset(Dataset):
     total_samples: int
     num_input_frames: int
     num_target_frames: int
+    target_frame_offset: int
 
     def __init__(
         self,
@@ -45,6 +53,7 @@ class DynamicScenes2dDataset(Dataset):
         as_numpy: bool = False,
         file_pattern: str = "*.npy",
         use_bps: bool = False,
+        target_frame_offset: int = 0,
     ) -> None:
         """
         Initializes the memory-mapped dataset.
@@ -62,11 +71,18 @@ class DynamicScenes2dDataset(Dataset):
         file_pattern: str (optional)
             Pattern to match NPY files (default: "*.npy")
         use_bps: bool
-            whether to bps encode the frames and targets 
+            whether to bps encode the frames and targets
+        target_frame_offset: int (optional)
+            Number of frames to skip after input frames before target frames.
+            For example, with num_input_frames=20, num_target_frames=1, target_frame_offset=9:
+            - Input: frames 0..19
+            - Target: frame 29 (skipping frames 20..28)
+            Default is 0 (no skipping, targets immediately follow inputs).
         """
         self.as_numpy = as_numpy
         self.num_input_frames = num_input_frames
         self.num_target_frames = num_target_frames
+        self.target_frame_offset = target_frame_offset
 
         self.use_bps = use_bps
 
@@ -147,16 +163,24 @@ class DynamicScenes2dDataset(Dataset):
         # Load the specific sample (copy from mmap to avoid holding references)
         scene_raw = np.array(self.memmapped_arrays[file_idx][local_idx])
 
-        if scene_raw.shape[0] < self.num_input_frames + self.num_target_frames:
+        # Calculate required total frames including offset
+        required_frames = self.num_input_frames + self.target_frame_offset + self.num_target_frames
+
+        if scene_raw.shape[0] < required_frames:
             raise ValueError(
-                "The specified number of input frames + target frames exceeds the number of frames available in this particular scene."
+                f"The specified number of input frames ({self.num_input_frames}) + "
+                f"target frame offset ({self.target_frame_offset}) + "
+                f"target frames ({self.num_target_frames}) = {required_frames} "
+                f"exceeds the number of frames available in this scene ({scene_raw.shape[0]})."
             )
 
         # Split into input and target
         input_frames = scene_raw[: self.num_input_frames]
-        target_frames = scene_raw[self.num_input_frames : self.num_input_frames + self.num_target_frames]
 
-
+        # Target frames start after input frames + offset
+        target_start_idx = self.num_input_frames + self.target_frame_offset
+        target_end_idx = target_start_idx + self.num_target_frames
+        target_frames = scene_raw[target_start_idx:target_end_idx]
 
         if self.use_bps:
             input_frames = bps.encode_frames(input_frames)

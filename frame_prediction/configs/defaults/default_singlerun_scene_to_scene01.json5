@@ -12,13 +12,16 @@
         "frame_dims": [64, 64],
         "checkpoint_dir": "checkpoints",  // where to save model state dicts; relative to "./frame_prediction/runs/training_run_name/"
         "batch_size": 32,
-        "learning_rate": 0.01
+        "learning_rate": 0.01,
+        "teacher_forcing": "off",  // "always", "off", or "scheduled_sampling"
+        "scheduled_sampling_decay": 1.0  // linear decay speed; only used when teacher_forcing is "scheduled_sampling"; 1.0 = p reaches 0 at final epoch, 2.0 = p reaches 0 at halfway point
     },
     "data": {
         "data_directory": "dynamic_scenes2d",  // relative to "./frame_prediction"
         "file_pattern": "*.npy",
         "num_input_frames": 20,  // num frames given as input
         "num_target_frames": 1,  // num frames to predict (autoregresively if >1)
+        "target_frame_offset": 0,  // num frames to skip between input and target (0 = predict immediately next frame(s), 9 = skip 9 frames and predict 10th frame ahead)
         "train_split": 0.7,
         "val_split": 0.1,
         "random_seed": 42  // used for dataset split

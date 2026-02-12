@@ -76,9 +76,7 @@ class ConvLSTM(nn.Module):
 
 
 class StackedConvLSTM(nn.Module):
-    def __init__(
-        self, input_channels: int, hidden_dim: int, kernel_size: int, num_layers: int
-    ):
+    def __init__(self, input_channels: int, hidden_dim: int, kernel_size: int, num_layers: int):
         super().__init__()
         self.num_layers = num_layers
         self.layers = nn.ModuleList()
@@ -149,9 +147,7 @@ class LSTMSceneToScene02(nn.Module):
         self.num_lstm_layers = num_lstm_layers
         self.kernel_size = kernel_size
 
-        self.convLSTM = StackedConvLSTM(
-            in_channels, hidden_dim, kernel_size, num_lstm_layers
-        )
+        self.convLSTM = StackedConvLSTM(in_channels, hidden_dim, kernel_size, num_lstm_layers)
 
         self.decoder = nn.Conv2d(hidden_dim, in_channels, kernel_size=(1, 1))
         self.activation = nn.Sigmoid()
@@ -183,8 +179,8 @@ class LSTMSceneToScene02(nn.Module):
         self,
         frame_sequence: torch.Tensor,
         num_steps: int,
-        teacher_forcing_prob: float,
-        target_sequence: torch.Tensor,
+        teacher_forcing_prob: float = 0.0,
+        target_sequence: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Predict multiple future frames autoregressively.
@@ -196,15 +192,19 @@ class LSTMSceneToScene02(nn.Module):
         num_steps: int
             Number of future frames to predict
         teacher_forcing_prob: float
-            Probability that target is used as next input
-        target_sequence: torch.Tensor
-            Target sequence of frames with shape (batch_size, num_frames, heigth, width)
+            Probability that target is used as next input (default: 0.0, pure autoregressive)
+        target_sequence: torch.Tensor | None
+            Target sequence of frames with shape (batch_size, num_frames, height, width).
+            Required when teacher_forcing_prob > 0.
 
         Returns
         -------
         torch.Tensor
             Predicted frames with shape (batch_size, num_steps, height, width)
         """
+        if teacher_forcing_prob > 0.0 and target_sequence is None:
+            raise ValueError("target_sequence is required when teacher_forcing_prob > 0")
+
         predictions = []
 
         # Ensure current_sequence has a channel dimension
@@ -228,10 +228,9 @@ class LSTMSceneToScene02(nn.Module):
             prediction = self.activation(self.decoder(last_h))
             predictions.append(prediction.unsqueeze(1))
 
-            # determine input for the next step (auto regressive)
-
-            if teacher_forcing_prob is not None and np.random.random() < teacher_forcing_prob:
-                next_in = target_sequence[:, i:i+1]
+            # determine input for the next step
+            if teacher_forcing_prob > 0.0 and np.random.random() < teacher_forcing_prob:
+                next_in = target_sequence[:, i : i + 1].unsqueeze(2)
             else:
                 next_in = prediction.unsqueeze(1)
 

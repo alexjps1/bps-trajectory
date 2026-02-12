@@ -52,7 +52,9 @@
                 "type": "float",
                 "vals": [0.0001, 0.01], // optimizer is Adam
                 "log": true
-            }
+            },
+            "teacher_forcing": "off",  // "always", "off", or "scheduled_sampling"
+            "scheduled_sampling_decay": 1.0  // linear decay speed; only used when teacher_forcing is "scheduled_sampling"; 1.0 = p reaches 0 at final epoch, 2.0 = p reaches 0 at halfway point
         },
         "data": {
             // not tunable
@@ -60,6 +62,7 @@
             "file_pattern": "*.npy",
             "num_input_frames": 20,    // num frames given as input
             "num_target_frames": 1,    // num frames to predict (autoregresively if >1)
+            "target_frame_offset": 0,  // num frames to skip between input and target (0 = predict immediately next frame(s), 9 = skip 9 frames and predict 10th frame ahead)
             "train_split": 0.7,
             "val_split": 0.1,
             "random_seed": 42    // used for dataset split

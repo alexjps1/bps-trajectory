@@ -12,9 +12,9 @@ import atexit
 import copy
 import sys
 from collections.abc import Sized
-from pathlib import Path
-from typing import cast, Dict
 from datetime import datetime
+from pathlib import Path
+from typing import Dict, cast
 
 # third party imports
 import json5
@@ -32,6 +32,20 @@ from models.lstm_scene_to_scene02 import LSTMSceneToScene02
 
 # constants
 THIS_DIR = Path(__file__).resolve().parent
+
+
+VALID_TEACHER_FORCING_MODES = {"always", "off", "scheduled_sampling"}
+
+
+def validate_teacher_forcing_config(training_config: dict) -> None:
+    """Validate teacher_forcing and scheduled_sampling_decay values in a training config."""
+    tf_mode = training_config.get("teacher_forcing", "off")
+    if tf_mode not in VALID_TEACHER_FORCING_MODES:
+        raise ValueError(f"Invalid teacher_forcing value '{tf_mode}'. Must be one of {VALID_TEACHER_FORCING_MODES}")
+
+    decay = training_config.get("scheduled_sampling_decay", 1.0)
+    if not isinstance(decay, (int, float)) or decay < 0:
+        raise ValueError(f"scheduled_sampling_decay must be a non-negative number, got {decay}")
 
 
 class Tee:
@@ -139,6 +153,7 @@ def objective(
     # Extract fixed parameters from config
     data_config = search_space_config["data"]
     training_config = search_space_config["training"]
+    validate_teacher_forcing_config(training_config)
     num_target_frames = data_config["num_target_frames"]
     frame_dims = tuple(training_config["frame_dims"])
     num_epochs = training_config["num_epochs"]
@@ -209,6 +224,8 @@ def objective(
             learning_rate=learning_rate,
             run_name=run_name,
             run_path=run_path,
+            teacher_forcing=training_config.get("teacher_forcing", "off"),
+            scheduled_sampling_decay=training_config.get("scheduled_sampling_decay", 0.99),
             trial=trial,
             writer=writer,
         )
@@ -350,15 +367,14 @@ def get_dataset(run_config: dict) -> DynamicScenes2dDataset:
         num_input_frames=data_config["num_input_frames"],
         num_target_frames=data_config["num_target_frames"],
         file_pattern=data_config["file_pattern"],
+        target_frame_offset=data_config.get("target_frame_offset", 0),
     )
     return dataset
 
 
 def get_split_datasets(
     run_config: dict, dataset: DynamicScenes2dDataset
-) -> tuple[
-    torch.utils.data.Dataset, torch.utils.data.Dataset, torch.utils.data.Dataset
-]:
+) -> tuple[torch.utils.data.Dataset, torch.utils.data.Dataset, torch.utils.data.Dataset]:
     """
     Returns train, val, test (in that order) datasets for the given dataset.
 
@@ -392,22 +408,14 @@ def get_dataloaders(
     """
     Returns train, val, test (in that order) dataloaders for the given datasets and batch size.
     """
-    train_dataloader = DataLoader(
-        dataset=train_dataset, batch_size=batch_size, shuffle=True
-    )
-    val_dataloader = DataLoader(
-        dataset=val_dataset, batch_size=batch_size, shuffle=False
-    )
-    test_dataloader = DataLoader(
-        dataset=test_dataset, batch_size=batch_size, shuffle=False
-    )
+    train_dataloader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
+    val_dataloader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False)
+    test_dataloader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False)
 
     return train_dataloader, val_dataloader, test_dataloader
 
 
-def load_config(
-    train_config_path: str | None, study_config_path: str | None
-) -> tuple[bool, dict, dict | None]:
+def load_config(train_config_path: str | None, study_config_path: str | None) -> tuple[bool, dict, dict | None]:
     """
     Returns is_optuna_study, run_config, study_config
     """
@@ -429,9 +437,7 @@ def load_config(
         raise ValueError("Neither a single-run nor optuna study config found")
 
 
-def run_single_training(
-    run_config: dict, dataset: DynamicScenes2dDataset, device: torch.device
-) -> None:
+def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, device: torch.device) -> None:
     """
     Note: Does not use resolve_config_value to read values from run_config.
     It is assumed that a single run config file will not contain tuning info
@@ -462,12 +468,11 @@ def run_single_training(
     assert isinstance(model_config["hidden_dim"], int)
     assert isinstance(model_config["num_lstm_layers"], int)
     assert isinstance(model_config["dropout_rate"], (int, float))
+    validate_teacher_forcing_config(training_config)
 
     # split dataset and get dataloaders
     train_dataset, val_dataset, test_dataset = get_split_datasets(run_config, dataset)
-    train_dl, val_dl, test_dl = get_dataloaders(
-        train_dataset, val_dataset, test_dataset, training_config["batch_size"]
-    )
+    train_dl, val_dl, test_dl = get_dataloaders(train_dataset, val_dataset, test_dataset, training_config["batch_size"])
 
     num_target_frames = data_config["num_target_frames"]
     frame_dims = tuple(training_config["frame_dims"])
@@ -514,11 +519,11 @@ def run_single_training(
             learning_rate=training_config["learning_rate"],
             run_name=run_name,
             run_path=run_path,
+            teacher_forcing=training_config.get("teacher_forcing", "off"),
+            scheduled_sampling_decay=training_config.get("scheduled_sampling_decay", 0.99),
             writer=writer,
         )
-        print(
-            f"Completed training with best val bce loss {train_summary_dict['best_val_bce_loss']}"
-        )
+        print(f"Completed training with best val bce loss {train_summary_dict['best_val_bce_loss']}")
     finally:
         writer.close()
 
@@ -545,7 +550,6 @@ def run_single_training(
     )
 
 
-
 def run_optuna_study(
     run_config: dict,
     study_config: dict,
@@ -554,9 +558,7 @@ def run_optuna_study(
 ) -> None:
     study_name = study_config["study"]["name"]
 
-    storage = (
-        f"sqlite:///{THIS_DIR}/runs/optuna_storage/{study_config['study']['storage']}"
-    )
+    storage = f"sqlite:///{THIS_DIR}/runs/optuna_storage/{study_config['study']['storage']}"
     n_trials = study_config["optimization"]["n_trials"]
     timeout = study_config["optimization"]["timeout_seconds"]
     pruner_type = study_config["pruner"]["type"]
@@ -566,9 +568,7 @@ def run_optuna_study(
     batch_size = cast(int, resolve_config_value(training_config.get("batch_size", 1)))
 
     train_dataset, val_dataset, test_dataset = get_split_datasets(run_config, dataset)
-    train_dl, val_dl, _ = get_dataloaders(
-        train_dataset, val_dataset, test_dataset, batch_size
-    )
+    train_dl, val_dl, _ = get_dataloaders(train_dataset, val_dataset, test_dataset, batch_size)
     train_size = len(cast(Sized, train_dataset))
     val_size = len(cast(Sized, val_dataset))
     test_size = len(cast(Sized, test_dataset))
@@ -612,9 +612,7 @@ pruner: {pruner_type}
 
     # Run optimization
     study.optimize(
-        lambda trial: objective(
-            trial, study_name, run_config, train_dl, val_dl, device
-        ),
+        lambda trial: objective(trial, study_name, run_config, train_dl, val_dl, device),
         n_trials=n_trials,
         timeout=timeout,
         show_progress_bar=True,
@@ -656,14 +654,11 @@ pruner: {pruner_type}
     else:
         raise ValueError("Provided model type in config is not defined.")
 
-
     final_model = final_model.to(device)
 
     # Recreate dataloaders with best batch size
-    train_dataloader_final, val_dataloader_final, test_dataloader_final = (
-        get_dataloaders(
-            train_dataset, val_dataset, test_dataset, best_params["batch_size"]
-        )
+    train_dataloader_final, val_dataloader_final, test_dataloader_final = get_dataloaders(
+        train_dataset, val_dataset, test_dataset, best_params["batch_size"]
     )
 
     final_run_name: str = f"{study_name}_finalrun"
@@ -677,16 +672,14 @@ pruner: {pruner_type}
         num_target_frames=num_target_frames,
         device=device,
         num_epochs=cast(int, resolve_config_value(training_config["num_epochs"])),
-        epochs_between_evals=cast(
-            int, resolve_config_value(training_config["epochs_between_evals"])
-        ),
+        epochs_between_evals=cast(int, resolve_config_value(training_config["epochs_between_evals"])),
         learning_rate=best_params["learning_rate"],
         run_name=final_run_name,
         run_path=final_run_path,
+        teacher_forcing=training_config.get("teacher_forcing", "off"),
+        scheduled_sampling_decay=training_config.get("scheduled_sampling_decay", 0.99),
     )
-    print(
-        f"Completed final training with best val bce loss {train_summary_dict['best_val_bce_loss']}"
-    )
+    print(f"Completed final training with best val bce loss {train_summary_dict['best_val_bce_loss']}")
 
     # Final evaluation on test set
     print("\nEvaluating on test set...")
@@ -764,11 +757,9 @@ def evaluate_checkpoint(
     print("Preparing test dataset...")
     train_dataset, val_dataset, test_dataset = get_split_datasets(run_config, dataset)
     batch_size = training_config.get("batch_size", 1)
-    
+
     # We only need the test dataloader
-    _, _, test_dl = get_dataloaders(
-        train_dataset, val_dataset, test_dataset, batch_size
-    )
+    _, _, test_dl = get_dataloaders(train_dataset, val_dataset, test_dataset, batch_size)
 
     # 4. Max Value Check
     print("Checking model output range (max value)...")
@@ -783,19 +774,19 @@ def evaluate_checkpoint(
                 preds = model(inputs)
             else:
                 preds = model.forward_multi_step(inputs, num_target_frames)
-            
+
             # Check max value in this batch
             current_max = preds.max().item()
             if current_max > max_pred:
                 max_pred = current_max
-    
+
     print(f"Maximum predicted scalar value in test set: {max_pred:.6f}")
     if max_pred < 0.01:
-         print("WARNING: Model appears to be outputting near-zero values (Dead ReLU/Sigmoid saturation?).")
+        print("WARNING: Model appears to be outputting near-zero values (Dead ReLU/Sigmoid saturation?).")
 
     # 5. Standard Evaluation
     print("Running standard evaluation metrics...")
-    # Use parent directory of checkpoint for output (likely 'checkpoints'), 
+    # Use parent directory of checkpoint for output (likely 'checkpoints'),
     # so we go up one level to the run directory
     run_path = checkpoint_path.parent.parent
     eval_run_name = f"eval_{checkpoint_path.stem}"
@@ -807,8 +798,8 @@ def evaluate_checkpoint(
         device=device,
         run_name=eval_run_name,
         run_path=run_path,
-        max_visualizations=5, # Generate a few visualizations during explicit eval
-        epoch=999, # Dummy epoch number for file naming
+        max_visualizations=5,  # Generate a few visualizations during explicit eval
+        epoch=999,  # Dummy epoch number for file naming
     )
 
     print("\nEvaluation Summary:")
@@ -824,23 +815,17 @@ def main(
     is_optuna_study: bool
     run_config: dict | None
     study_config: dict | None
-    is_optuna_study, run_config, study_config = load_config(
-        train_config_path, study_config_path
-    )
+    is_optuna_study, run_config, study_config = load_config(train_config_path, study_config_path)
 
     # Setup logging to file
     log_dir_name: str
     if is_optuna_study:
         log_dir_name = cast(dict, study_config)["study"]["name"]
-        setup_logging(
-            log_dir=(THIS_DIR / "runs" / log_dir_name / "logs"), log_name=log_dir_name
-        )
+        setup_logging(log_dir=(THIS_DIR / "runs" / log_dir_name / "logs"), log_name=log_dir_name)
         print("Running an Optuna study with multiple training runs.")
     else:
         log_dir_name = run_config["name"]
-        setup_logging(
-            log_dir=(THIS_DIR / "runs" / log_dir_name / "logs"), log_name=log_dir_name
-        )
+        setup_logging(log_dir=(THIS_DIR / "runs" / log_dir_name / "logs"), log_name=log_dir_name)
         print("Running a single training run.")
 
     # Device selection
@@ -853,7 +838,7 @@ def main(
     if evaluate_checkpoint_path:
         if is_optuna_study:
             print("Warning: Evaluating using a study config. Using the 'run' section as base config.")
-        
+
         evaluate_checkpoint(run_config, evaluate_checkpoint_path, dataset, device)
         return
 
@@ -882,7 +867,7 @@ if __name__ == "__main__":
         help="Path to json file containing optuna study settings, inluding which hyperparameters to tune and how many runs to perform.",
         required=False,
     )
-    
+
     parser.add_argument(
         "--evaluate",
         "-e",
