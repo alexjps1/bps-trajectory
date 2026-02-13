@@ -126,7 +126,8 @@ def visualize_time_series_grid_difference(
     save_image: bool = True,
     target_frame_offset: int = 0,
     t_plus_10 = False,
-    step_size = 1
+    step_size = 1,
+    only_f1 = False
 ) -> None:
     """
     Visualize grid occupancy predictions vs targets with color coding and save as PNG.
@@ -299,33 +300,46 @@ def visualize_time_series_grid_difference(
         # Render Metrics text below the plot
         if loss_metrics is not None and i < len(loss_metrics):
             m = loss_metrics[i]
+            if only_f1:
+                f1_text = f"F1: {m.get('f1', 0):.3f}"
 
+                ax.text(
+                    0.5,                 # horizontal center
+                    -0.02,
+                    f1_text,
+                    transform=ax.transAxes,
+                    ha="center",         # zentriert
+                    va="top",
+                    fontsize=16,
+                    family="monospace",
+                )
+            else:
             # Format text as two columns, left-aligned within each
-            col1_text = f"BCE: {m.get('bce', 0):.3f}\nMSE: {m.get('mse', 0):.3f}\nF1:  {m.get('f1', 0):.3f}"
-            col2_text = f"BCE bin: {m.get('bce_bin', 0):.3f}\nMSE bin: {m.get('mse_bin', 0):.3f}\nAcc:     {m.get('accuracy', 0):.3f}"
+                col1_text = f"BCE: {m.get('bce', 0):.3f}\nMSE: {m.get('mse', 0):.3f}\nF1:  {m.get('f1', 0):.3f}"
+                col2_text = f"BCE bin: {m.get('bce_bin', 0):.3f}\nMSE bin: {m.get('mse_bin', 0):.3f}\nAcc:     {m.get('accuracy', 0):.3f}"
 
-            # Place left column
-            ax.text(
-                0.0,
-                -0.02,
-                col1_text,
-                transform=ax.transAxes,
-                ha="left",
-                va="top",
-                fontsize=13,
-                family="monospace",
-            )
-            # Place right column
-            ax.text(
-                1.0,
-                -0.02,
-                col2_text,
-                transform=ax.transAxes,
-                ha="right",
-                va="top",
-                fontsize=13,
-                family="monospace",
-            )
+                # Place left column
+                ax.text(
+                    0.0,
+                    -0.02,
+                    col1_text,
+                    transform=ax.transAxes,
+                    ha="left",
+                    va="top",
+                    fontsize=13,
+                    family="monospace",
+                )
+                # Place right column
+                ax.text(
+                    1.0,
+                    -0.02,
+                    col2_text,
+                    transform=ax.transAxes,
+                    ha="right",
+                    va="top",
+                    fontsize=13,
+                    family="monospace",
+                )
 
         plot_idx += 1
 
