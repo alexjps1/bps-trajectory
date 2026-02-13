@@ -125,6 +125,8 @@ def visualize_time_series_grid_difference(
     show_window: bool = False,
     save_image: bool = True,
     target_frame_offset: int = 0,
+    t_plus_10 = False,
+    step_size = 1
 ) -> None:
     """
     Visualize grid occupancy predictions vs targets with color coding and save as PNG.
@@ -242,7 +244,7 @@ def visualize_time_series_grid_difference(
     plot_idx = 0
 
     # plot input frames if provided
-    for i in range(num_input_frames):
+    for i in range(0, num_input_frames, step_size):
         ax = axs[plot_idx]
 
         frame = cast(np.ndarray, input_frames)[i]
@@ -264,7 +266,7 @@ def visualize_time_series_grid_difference(
             axs[j].axis("off")
 
     # plot predictions vs targets difference maps
-    for i in range(num_predicted_frames):
+    for i in range(0, num_predicted_frames, step_size):
         if plot_idx >= len(axs):
             break  # Avoid index error if grid is too small
 
@@ -289,6 +291,8 @@ def visualize_time_series_grid_difference(
         ax.imshow(rgb)
         # Calculate the actual frame index accounting for offset
         actual_frame_idx = i + 1 + target_frame_offset
+        if t_plus_10:
+            actual_frame_idx = 10
         ax.set_title(f"Pred t+{actual_frame_idx}", fontsize=14, fontweight="bold")
         ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
 
@@ -362,16 +366,16 @@ def visualize_time_series_grid_difference(
     plt.tight_layout()
 
     # Add debug info: max prediction value (before discretization)
-    fig.text(
-        0.98,
-        0.02,
-        f"max pred: {max_pred_value:.4f}",
-        ha="right",
-        va="bottom",
-        fontsize=8,
-        color="lightgrey",
-        alpha=0.7,
-    )
+    # fig.text(
+    #     0.98,
+    #     0.02,
+    #     f"max pred: {max_pred_value:.4f}",
+    #     ha="right",
+    #     va="bottom",
+    #     fontsize=8,
+    #     color="lightgrey",
+    #     alpha=0.7,
+    # )
 
     if show_window:
         plt.show()
