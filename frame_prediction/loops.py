@@ -59,9 +59,10 @@ def train_scene_to_scene(
     run_name: str,
     run_path: Path,
     teacher_forcing: str = "off",
-    scheduled_sampling_decay: float = 0.99,
+    scheduled_sampling_decay: float = 1.0,
     trial=None,
     writer: SummaryWriter | None = None,
+    target_frame_offset: int = 0,
 ) -> Dict[str, float]:
     """
     Train a scene-to-scene frame prediction model.
@@ -243,6 +244,7 @@ def train_scene_to_scene(
                 max_visualizations=3,
                 epoch=epoch,
                 writer=writer,
+                target_frame_offset=target_frame_offset,
             )
             # unpack values from the evaluation
             avg_val_bce_loss = eval_summary_dict["avg_val_bce"]
@@ -318,6 +320,7 @@ def evaluate_scene_to_scene(
     max_visualizations: int = 0,
     epoch: int | None = None,
     writer: SummaryWriter | None = None,
+    target_frame_offset: int = 0,
 ) -> Dict[str, float]:
     """
     Evaluate a scene-to-scene frame prediction model.
@@ -457,6 +460,7 @@ def evaluate_scene_to_scene(
                         output_path=img_dir / f"{base_fname}_tseries.png",
                         save_image=True,
                         show_window=False,
+                        target_frame_offset=target_frame_offset,
                     )
 
                     # Log to TensorBoard (using the tseries image if available)
