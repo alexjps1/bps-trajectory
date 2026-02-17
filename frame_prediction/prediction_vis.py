@@ -125,6 +125,9 @@ def visualize_time_series_grid_difference(
     show_window: bool = False,
     save_image: bool = True,
     target_frame_offset: int = 0,
+    t_plus_10 = False,
+    step_size = 1,
+    only_f1 = False
 ) -> None:
     """
     Visualize grid occupancy predictions vs targets with color coding and save as PNG.
@@ -242,7 +245,7 @@ def visualize_time_series_grid_difference(
     plot_idx = 0
 
     # plot input frames if provided
-    for i in range(num_input_frames):
+    for i in range(0, num_input_frames, step_size):
         ax = axs[plot_idx]
 
         frame = cast(np.ndarray, input_frames)[i]
@@ -264,7 +267,7 @@ def visualize_time_series_grid_difference(
             axs[j].axis("off")
 
     # plot predictions vs targets difference maps
-    for i in range(num_predicted_frames):
+    for i in range(0, num_predicted_frames, step_size):
         if plot_idx >= len(axs):
             break  # Avoid index error if grid is too small
 
@@ -289,39 +292,54 @@ def visualize_time_series_grid_difference(
         ax.imshow(rgb)
         # Calculate the actual frame index accounting for offset
         actual_frame_idx = i + 1 + target_frame_offset
+        if t_plus_10:
+            actual_frame_idx = 10
         ax.set_title(f"Pred t+{actual_frame_idx}", fontsize=14, fontweight="bold")
         ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
 
         # Render Metrics text below the plot
         if loss_metrics is not None and i < len(loss_metrics):
             m = loss_metrics[i]
+            if only_f1:
+                f1_text = f"F1: {m.get('f1', 0):.3f}"
 
+                ax.text(
+                    0.5,                 # horizontal center
+                    -0.02,
+                    f1_text,
+                    transform=ax.transAxes,
+                    ha="center",         # zentriert
+                    va="top",
+                    fontsize=16,
+                    family="monospace",
+                )
+            else:
             # Format text as two columns, left-aligned within each
-            col1_text = f"BCE: {m.get('bce', 0):.3f}\nMSE: {m.get('mse', 0):.3f}\nF1:  {m.get('f1', 0):.3f}"
-            col2_text = f"BCE bin: {m.get('bce_bin', 0):.3f}\nMSE bin: {m.get('mse_bin', 0):.3f}\nAcc:     {m.get('accuracy', 0):.3f}"
+                col1_text = f"BCE: {m.get('bce', 0):.3f}\nMSE: {m.get('mse', 0):.3f}\nF1:  {m.get('f1', 0):.3f}"
+                col2_text = f"BCE bin: {m.get('bce_bin', 0):.3f}\nMSE bin: {m.get('mse_bin', 0):.3f}\nAcc:     {m.get('accuracy', 0):.3f}"
 
-            # Place left column
-            ax.text(
-                0.0,
-                -0.02,
-                col1_text,
-                transform=ax.transAxes,
-                ha="left",
-                va="top",
-                fontsize=13,
-                family="monospace",
-            )
-            # Place right column
-            ax.text(
-                1.0,
-                -0.02,
-                col2_text,
-                transform=ax.transAxes,
-                ha="right",
-                va="top",
-                fontsize=13,
-                family="monospace",
-            )
+                # Place left column
+                ax.text(
+                    0.0,
+                    -0.02,
+                    col1_text,
+                    transform=ax.transAxes,
+                    ha="left",
+                    va="top",
+                    fontsize=13,
+                    family="monospace",
+                )
+                # Place right column
+                ax.text(
+                    1.0,
+                    -0.02,
+                    col2_text,
+                    transform=ax.transAxes,
+                    ha="right",
+                    va="top",
+                    fontsize=13,
+                    family="monospace",
+                )
 
         plot_idx += 1
 
@@ -362,16 +380,16 @@ def visualize_time_series_grid_difference(
     plt.tight_layout()
 
     # Add debug info: max prediction value (before discretization)
-    fig.text(
-        0.98,
-        0.02,
-        f"max pred: {max_pred_value:.4f}",
-        ha="right",
-        va="bottom",
-        fontsize=8,
-        color="lightgrey",
-        alpha=0.7,
-    )
+    # fig.text(
+    #     0.98,
+    #     0.02,
+    #     f"max pred: {max_pred_value:.4f}",
+    #     ha="right",
+    #     va="bottom",
+    #     fontsize=8,
+    #     color="lightgrey",
+    #     alpha=0.7,
+    # )
 
     if show_window:
         plt.show()
