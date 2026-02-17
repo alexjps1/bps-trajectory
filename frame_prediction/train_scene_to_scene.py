@@ -33,6 +33,9 @@ from models.lstm_scene_to_scene02 import LSTMSceneToScene02
 # constants
 THIS_DIR = Path(__file__).resolve().parent
 
+# whether to check max value in evaluate_checkpoint
+# (for checking if model is just spitting out tiny values that are not visible in descretized visualizations)
+MAX_VAL_CHECK = False
 
 VALID_TEACHER_FORCING_MODES = {"always", "off", "scheduled_sampling"}
 
@@ -225,9 +228,10 @@ def objective(
             run_name=run_name,
             run_path=run_path,
             teacher_forcing=training_config.get("teacher_forcing", "off"),
-            scheduled_sampling_decay=training_config.get("scheduled_sampling_decay", 0.99),
+            scheduled_sampling_decay=training_config.get("scheduled_sampling_decay", 1.0),
             trial=trial,
             writer=writer,
+            target_frame_offset=data_config.get("target_frame_offset", 0),
         )
     finally:
         writer.close()
@@ -520,8 +524,9 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
             run_name=run_name,
             run_path=run_path,
             teacher_forcing=training_config.get("teacher_forcing", "off"),
-            scheduled_sampling_decay=training_config.get("scheduled_sampling_decay", 0.99),
+            scheduled_sampling_decay=training_config.get("scheduled_sampling_decay", 1.0),
             writer=writer,
+            target_frame_offset=data_config.get("target_frame_offset", 0),
         )
         print(f"Completed training with best val bce loss {train_summary_dict['best_val_bce_loss']}")
     finally:
@@ -535,6 +540,7 @@ def run_single_training(run_config: dict, dataset: DynamicScenes2dDataset, devic
         device=device,
         run_name=run_name,
         run_path=run_path,
+        target_frame_offset=data_config.get("target_frame_offset", 0),
     )
 
     # unpack values from the evaluation
@@ -677,7 +683,8 @@ pruner: {pruner_type}
         run_name=final_run_name,
         run_path=final_run_path,
         teacher_forcing=training_config.get("teacher_forcing", "off"),
-        scheduled_sampling_decay=training_config.get("scheduled_sampling_decay", 0.99),
+        scheduled_sampling_decay=training_config.get("scheduled_sampling_decay", 1.0),
+        target_frame_offset=data_config.get("target_frame_offset", 0),
     )
     print(f"Completed final training with best val bce loss {train_summary_dict['best_val_bce_loss']}")
 
@@ -690,6 +697,7 @@ pruner: {pruner_type}
         device=device,
         run_name=final_run_name,
         run_path=final_run_path,
+        target_frame_offset=data_config.get("target_frame_offset", 0),
     )
     # unpack values from the test
     test_bce = eval_summary_dict["avg_val_bce"]
@@ -709,10 +717,13 @@ def evaluate_checkpoint(
     checkpoint_path: Path,
     dataset: DynamicScenes2dDataset,
     device: torch.device,
+    split_dataset = False,
 ) -> None:
     """
     Load a model from a checkpoint and evaluate it on the test set.
     Also checks the maximum predicted value to detect dead models.
+
+    WARNING: Expects that the given dataset is ALL for training unless split_dataset is set to True.
     """
     print(f"\n--- Evaluating Checkpoint: {checkpoint_path} ---\n")
 
@@ -754,35 +765,41 @@ def evaluate_checkpoint(
     model.eval()
 
     # 3. Prepare Data
-    print("Preparing test dataset...")
-    train_dataset, val_dataset, test_dataset = get_split_datasets(run_config, dataset)
     batch_size = training_config.get("batch_size", 1)
 
-    # We only need the test dataloader
-    _, _, test_dl = get_dataloaders(train_dataset, val_dataset, test_dataset, batch_size)
+    print("Preparing test dataset...")
+    test_dl: DataLoader
+    if split_dataset:
+        print("Splitting data into trian, val, and test, then only using test...")
+        train_dataset, val_dataset, test_dataset = get_split_datasets(run_config, dataset)
+        _, _, test_dl = get_dataloaders(train_dataset, val_dataset, test_dataset, batch_size)
+    else:
+        print("Using the entire given dataset for test (no splitting)")
+        test_dl = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=False)
 
     # 4. Max Value Check
-    print("Checking model output range (max value)...")
-    max_pred = -float("inf")
-    num_target_frames = data_config["num_target_frames"]
+    if MAX_VAL_CHECK:
+        print("Checking model output range (max value)...")
+        max_pred = -float("inf")
+        num_target_frames = data_config["num_target_frames"]
 
-    # Use tqdm if possible, or just simple loop
-    with torch.no_grad():
-        for inputs, _ in test_dl:
-            inputs = inputs.to(device)
-            if num_target_frames == 1:
-                preds = model(inputs)
-            else:
-                preds = model.forward_multi_step(inputs, num_target_frames)
+        # Use tqdm if possible, or just simple loop
+        with torch.no_grad():
+            for inputs, _ in test_dl:
+                inputs = inputs.to(device)
+                if num_target_frames == 1:
+                    preds = model(inputs)
+                else:
+                    preds = model.forward_multi_step(inputs, num_target_frames)
 
-            # Check max value in this batch
-            current_max = preds.max().item()
-            if current_max > max_pred:
-                max_pred = current_max
+                # Check max value in this batch
+                current_max = preds.max().item()
+                if current_max > max_pred:
+                    max_pred = current_max
 
-    print(f"Maximum predicted scalar value in test set: {max_pred:.6f}")
-    if max_pred < 0.01:
-        print("WARNING: Model appears to be outputting near-zero values (Dead ReLU/Sigmoid saturation?).")
+        print(f"Maximum predicted scalar value in test set: {max_pred:.6f}")
+        if max_pred < 0.01:
+            print("WARNING: Model appears to be outputting near-zero values (Dead ReLU/Sigmoid saturation?).")
 
     # 5. Standard Evaluation
     print("Running standard evaluation metrics...")
@@ -800,6 +817,7 @@ def evaluate_checkpoint(
         run_path=run_path,
         max_visualizations=5,  # Generate a few visualizations during explicit eval
         epoch=999,  # Dummy epoch number for file naming
+        target_frame_offset=data_config.get("target_frame_offset", 0),
     )
 
     print("\nEvaluation Summary:")
@@ -810,6 +828,7 @@ def main(
     train_config_path: str | None,
     study_config_path: str | None,
     evaluate_checkpoint_path: Path | None = None,
+    evaluate_dataset_file_pattern: str | None = None,
 ) -> None:
     # Load configuration to get the study name for logging
     is_optuna_study: bool
@@ -832,15 +851,27 @@ def main(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # get dataset
-    dataset = get_dataset(run_config)
-
     if evaluate_checkpoint_path:
+        # get test dataset
+        if evaluate_dataset_file_pattern is not None:
+            run_config["data"]["file_pattern"] = evaluate_dataset_file_pattern
+        dataset = get_dataset(run_config)
+
         if is_optuna_study:
             print("Warning: Evaluating using a study config. Using the 'run' section as base config.")
 
-        evaluate_checkpoint(run_config, evaluate_checkpoint_path, dataset, device)
+        evaluate_checkpoint(
+                run_config,
+                evaluate_checkpoint_path,
+                dataset,
+                device,
+                split_dataset=(evaluate_dataset_file_pattern is None)
+        )
+
         return
+
+    # get training dataset
+    dataset = get_dataset(run_config)
 
     if is_optuna_study:
         run_optuna_study(run_config, cast(dict, study_config), dataset, device)
@@ -877,6 +908,13 @@ if __name__ == "__main__":
         required=False,
     )
 
+    parser.add_argument(
+        "--test-ds-pattern",
+        type=str,
+        help="Special file pattern to use to find test data in dataset dir",
+        required=False
+    )
+
     args = parser.parse_args()
 
     if not (args.train or args.study):
@@ -885,4 +923,4 @@ if __name__ == "__main__":
     if args.train and args.study:
         raise ValueError("Cannot provide two config files.")
 
-    main(args.train, args.study, args.evaluate)
+    main(args.train, args.study, args.evaluate, args.test_ds_pattern)
