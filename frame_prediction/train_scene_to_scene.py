@@ -777,11 +777,12 @@ def evaluate_checkpoint(
         print("Using the entire given dataset for test (no splitting)")
         test_dl = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=False)
 
+    num_target_frames = data_config["num_target_frames"]
+
     # 4. Max Value Check
     if MAX_VAL_CHECK:
         print("Checking model output range (max value)...")
         max_pred = -float("inf")
-        num_target_frames = data_config["num_target_frames"]
 
         # Use tqdm if possible, or just simple loop
         with torch.no_grad():
